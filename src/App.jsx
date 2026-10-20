@@ -2,7 +2,12 @@ import { useState, useMemo, useEffect } from 'react';
 import { readExcel, fetchGoogleSheet } from './utils/readExcel';
 import './App.css';
 
-// Tipos de cambio por defecto por país (moneda local por 1 USD)
+// ENLACE AUTOMÁTICO DE GOOGLE SHEETS
+// (Si ya lo sincronizaste una vez en tu navegador, se toma automáticamente de tu memoria local;
+// también puedes pegar aquí tu link de 1rc586X_ibh0v3q79aaRE... para dejarlo fijo en el código)
+const DEFAULT_SHEET_URL =
+  'https://docs.google.com/spreadsheets/d/1RLIyRwIuMcqxDhictdn4U30bYNNaLa1LdszB4PILV-U/edit?gid=958277312#gid=958277312';
+
 const DEFAULT_RATES = {
   CHILE: 980.39,
   COLOMBIA: 4200.0,
@@ -83,7 +88,6 @@ function parsePrice(rawPrice) {
   return Number.isFinite(num) ? num : 0;
 }
 
-// Clasifica cada registro según Status y Sub Status en: approve, reject, trash o pending
 function classifyStatus(rawStatus, rawSubStatus) {
   const st = normalizeText(`${rawStatus || ''} ${rawSubStatus || ''}`);
   if (!st || st.includes('approv') || st.includes('aprob') || st.includes('venta') || st.includes('confirm')) {
@@ -109,14 +113,13 @@ function classifyStatus(rawStatus, rawSubStatus) {
   ) {
     return 'reject';
   }
-  // Estados en gestión (Recall, No Answer, New, Processing, Hold)
   return 'pending';
 }
 
 export default function App() {
-  // Tema Claro / Oscuro
+  // Tema Claro / Oscuro (Por defecto 'light' como en tu captura)
   const [theme, setTheme] = useState(
-    () => localStorage.getItem('gestiontl_theme') || 'dark'
+    () => localStorage.getItem('gestiontl_theme') || 'light'
   );
 
   useEffect(() => {
@@ -124,13 +127,33 @@ export default function App() {
     localStorage.setItem('gestiontl_theme', theme);
   }, [theme]);
 
-  // Bases de datos
-  const [bd1Data, setBd1Data] = useState([]);
-  const [bd2Data, setBd2Data] = useState([]);
+  // Sidebar retráctil y menú móvil
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showConfigModal, setShowConfigModal] = useState(false);
 
-  // Configuración Google Sheets
+  // Drill-down: Operador seleccionado para ver su reporte individual
+  const [selectedOperatorCode, setSelectedOperatorCode] = useState(null);
+
+  // Bases de datos (con respaldo en caché local para carga instantánea)
+  const [bd1Data, setBd1Data] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('gestiontl_cache_bd1') || '[]');
+    } catch {
+      return [];
+    }
+  });
+  const [bd2Data, setBd2Data] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('gestiontl_cache_bd2') || '[]');
+    } catch {
+      return [];
+    }
+  });
+
+  // Configuración de Google Sheets (oculta y automática)
   const [sheetUrl, setSheetUrl] = useState(
-    () => localStorage.getItem('gestiontl_sheet_url') || ''
+    () => localStorage.getItem('gestiontl_sheet_url') || DEFAULT_SHEET_URL
   );
   const [bd1SheetName, setBd1SheetName] = useState(
     () => localStorage.getItem('gestiontl_bd1_tab') || 'BD1'
@@ -140,10 +163,8 @@ export default function App() {
   );
   const [loadingSheets, setLoadingSheets] = useState(false);
   const [statusMessage, setStatusMessage] = useState({ type: '', text: '' });
-  const [showDataConfig, setShowDataConfig] = useState(true);
-  const [showRatesConfig, setShowRatesConfig] = useState(false);
 
-  // Tipos de cambio por país
+  // Tipos de cambio
   const [countryRates, setCountryRates] = useState(() => {
     const saved = localStorage.getItem('gestiontl_rates');
     if (saved) {
@@ -166,22 +187,18 @@ export default function App() {
     localStorage.setItem('gestiontl_bd2_tab', bd2SheetName);
   }, [sheetUrl, bd1SheetName, bd2SheetName]);
 
-  // Navegación, filtros y ordenamiento
-  const [activeTab, setActiveTab] = useState('operador'); // 'campana' | 'operador' | 'tl'
+  // Filtros y Ordenamiento
   const [selectedCountry, setSelectedCountry] = useState('Todos los países');
   const [selectedTLFilter, setSelectedTLFilter] = useState('Todos los Team Leaders');
   const [searchQuery, setSearchQuery] = useState('');
-
-  // Ordenamiento: 'ventas' | 'checkUsd' | 'operador' | 'teamLeader' | 'rechazos' | 'trash' | 'leads'
   const [sortField, setSortField] = useState('ventas');
-  const [sortOrder, setSortOrder] = useState('desc'); // 'asc' | 'desc'
+  const [sortOrder, setSortOrder] = useState('desc');
 
   const handleSortClick = (field) => {
     if (sortField === field) {
       setSortOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'));
     } else {
       setSortField(field);
-      // Para nombres (operador / teamLeader) por defecto A->Z ('asc'), para métricas numéricas Mayor->Menor ('desc')
       setSortOrder(field === 'operador' || field === 'teamLeader' ? 'asc' : 'desc');
     }
   };
@@ -197,50 +214,71 @@ export default function App() {
     return Number(countryRates.DEFAULT) > 0 ? Number(countryRates.DEFAULT) : 980.39;
   };
 
-  // Sincronización con Google Sheets
-  const handleSyncGoogleSheets = async () => {
-    if (!sheetUrl.trim()) {
-      setStatusMessage({
-        type: 'error',
-        text: 'Pega primero el enlace de tu documento de Google Sheets.',
-      });
-      return;
-    }
-
+  // CONSULTA AUTOMÁTICA E INMEDIATA A GOOGLE SHEETS AL ENTRAR
+  const handleSyncGoogleSheets = async (silent = false) => {
+    if (!sheetUrl.trim()) return;
     try {
       setLoadingSheets(true);
-      setStatusMessage({ type: '', text: '' });
+      if (!silent) setStatusMessage({ type: '', text: '' });
 
-      const [rowsBd1, rowsBd2] = await Promise.all([
-        fetchGoogleSheet(sheetUrl, bd1SheetName),
-        fetchGoogleSheet(sheetUrl, bd2SheetName),
-      ]);
+      let rowsBd1 = [];
+      try {
+        rowsBd1 = await fetchGoogleSheet(sheetUrl, bd1SheetName);
+      } catch {
+        const altTab = bd1SheetName === 'BD1' ? 'BD' : 'BD1';
+        rowsBd1 = await fetchGoogleSheet(sheetUrl, altTab);
+      }
 
-      setBd1Data(rowsBd1);
-      setBd2Data(rowsBd2);
-      setStatusMessage({
-        type: 'success',
-        text: `Sincronización exitosa: ${rowsBd1.length} registros en BD1 y ${rowsBd2.length} operadores en BD2.`,
-      });
+      const rowsBd2 = await fetchGoogleSheet(sheetUrl, bd2SheetName);
+
+      if (rowsBd1.length > 0) {
+        setBd1Data(rowsBd1);
+        localStorage.setItem('gestiontl_cache_bd1', JSON.stringify(rowsBd1));
+      }
+      if (rowsBd2.length > 0) {
+        setBd2Data(rowsBd2);
+        localStorage.setItem('gestiontl_cache_bd2', JSON.stringify(rowsBd2));
+      }
+
+      if (!silent) {
+        setStatusMessage({
+          type: 'success',
+          text: `Sincronización exitosa: ${rowsBd1.length} registros en BD1 y ${rowsBd2.length} operadores en BD2.`,
+        });
+      }
     } catch (error) {
-      setStatusMessage({
-        type: 'error',
-        text: error.message || 'Error al conectar con Google Sheets.',
-      });
+      if (!silent) {
+        setStatusMessage({
+          type: 'error',
+          text: error.message || 'Error al conectar con Google Sheets.',
+        });
+      }
     } finally {
       setLoadingSheets(false);
     }
   };
 
-  // Carga de Excel local
+  useEffect(() => {
+    handleSyncGoogleSheets(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleFileUpload = async (e, type) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setStatusMessage({ type: '', text: '' });
     try {
       const rows = await readExcel(file);
-      if (type === 'bd1') setBd1Data(rows);
-      else setBd2Data(rows);
+      if (type === 'bd1') {
+        setBd1Data(rows);
+        localStorage.setItem('gestiontl_cache_bd1', JSON.stringify(rows));
+      } else {
+        setBd2Data(rows);
+        localStorage.setItem('gestiontl_cache_bd2', JSON.stringify(rows));
+      }
+      setStatusMessage({
+        type: 'success',
+        text: `Archivo ${file.name} cargado correctamente (${rows.length} filas).`,
+      });
     } catch (error) {
       setStatusMessage({
         type: 'error',
@@ -289,7 +327,7 @@ export default function App() {
     return map;
   }, [bd2Data]);
 
-  // 2. Enriquecer cada registro de BD1 con BD2, categoría de estado y conversión a USD por país
+  // 2. Enriquecer cada registro de BD1 con BD2
   const enrichedRecords = useMemo(() => {
     return bd1Data.map((row) => {
       const usuario =
@@ -306,8 +344,8 @@ export default function App() {
       const rawCountry = getRowValue(row, ['Country', 'Pais', 'País', 'Campaña']);
       const country = String(rawCountry || info?.campaign || 'Chile').trim();
 
-      const rawStatus = getRowValue(row, ['Status', 'Estado']);
-      const rawSubStatus = getRowValue(row, ['Sub Status', 'SubStatus', 'Sub Estado']);
+      const rawStatus = String(getRowValue(row, ['Status', 'Estado']) || 'Approved').trim();
+      const rawSubStatus = String(getRowValue(row, ['Sub Status', 'SubStatus', 'Sub Estado']) || '').trim();
       const category = classifyStatus(rawStatus, rawSubStatus);
 
       const finalPriceLocal = parsePrice(
@@ -316,19 +354,28 @@ export default function App() {
       const rate = getRateForCountry(country);
       const priceUsd = finalPriceLocal > 0 ? finalPriceLocal / rate : 0;
 
+      const orderNumber = getRowValue(row, ['Number', 'Index by partner', 'Orden', 'ID']);
+      const dateCrm = getRowValue(row, ['Date of creation in CRM', 'Date', 'Fecha']);
+      const products = getRowValue(row, ['Products', 'Product lead', 'Producto']);
+
       return {
         usuario,
         operador: info ? info.operador : usuario,
         teamLeader: info ? info.teamLeader : 'Sin asignar',
         country,
-        category, // 'approve' | 'reject' | 'trash' | 'pending'
+        rawStatus,
+        rawSubStatus,
+        category,
         finalPriceLocal,
         priceUsd,
+        orderNumber,
+        dateCrm,
+        products,
       };
     });
   }, [bd1Data, operatorDirectory, countryRates]);
 
-  // Listas para filtros desplegables
+  // Listas desplegables
   const countriesList = useMemo(() => {
     const unique = new Set(enrichedRecords.map((r) => r.country).filter(Boolean));
     return ['Todos los países', ...Array.from(unique)];
@@ -339,7 +386,7 @@ export default function App() {
     return ['Todos los Team Leaders', ...Array.from(unique)];
   }, [enrichedRecords]);
 
-  // 3. Aplicar filtros globales
+  // 3. Filtrar registros
   const filteredRecords = useMemo(() => {
     const q = normalizeText(searchQuery);
     return enrichedRecords.filter((rec) => {
@@ -362,30 +409,6 @@ export default function App() {
       return true;
     });
   }, [enrichedRecords, selectedCountry, selectedTLFilter, searchQuery]);
-
-  // Función auxiliar para ordenar cualquier tabla según sortField y sortOrder
-  const sortCollection = (items) => {
-    const sorted = [...items];
-    sorted.sort((a, b) => {
-      let valA = a[sortField];
-      let valB = b[sortField];
-
-      if (typeof valA === 'string' || typeof valB === 'string') {
-        const cmp = String(valA || '').localeCompare(String(valB || ''), 'es', {
-          sensitivity: 'base',
-        });
-        return sortOrder === 'asc' ? cmp : -cmp;
-      }
-
-      const numA = Number(valA) || 0;
-      const numB = Number(valB) || 0;
-      if (numA === numB) {
-        return (b.ventas || 0) - (a.ventas || 0);
-      }
-      return sortOrder === 'asc' ? numA - numB : numB - numA;
-    });
-    return sorted;
-  };
 
   // 4. Agrupación POR OPERADOR
   const operatorStats = useMemo(() => {
@@ -424,7 +447,6 @@ export default function App() {
     });
 
     const list = Array.from(map.values()).map((item) => {
-      // El Check se calcula sobre las ventas aprobadas (o sobre el total si no hay distinción de estado)
       const checkUsd =
         item.ventas > 0
           ? item.sumApprovedUsd / item.ventas
@@ -444,136 +466,23 @@ export default function App() {
       };
     });
 
-    return sortCollection(list);
-  }, [filteredRecords, sortField, sortOrder]);
-
-  // 5. Agrupación POR TEAM LEADER
-  const teamLeaderStats = useMemo(() => {
-    const map = new Map();
-
-    filteredRecords.forEach((rec) => {
-      const key = rec.teamLeader;
-      if (!map.has(key)) {
-        map.set(key, {
-          teamLeader: key,
-          operador: key, // alias para cuando se ordena por nombre
-          operatorsSet: new Set(),
-          leads: 0,
-          ventas: 0,
-          rechazos: 0,
-          trash: 0,
-          pending: 0,
-          sumApprovedUsd: 0,
-          sumAllUsd: 0,
+    return [...list].sort((a, b) => {
+      const valA = a[sortField];
+      const valB = b[sortField];
+      if (typeof valA === 'string' || typeof valB === 'string') {
+        const cmp = String(valA || '').localeCompare(String(valB || ''), 'es', {
+          sensitivity: 'base',
         });
+        return sortOrder === 'asc' ? cmp : -cmp;
       }
-      const item = map.get(key);
-      item.operatorsSet.add(rec.usuario);
-      item.leads += 1;
-      item.sumAllUsd += rec.priceUsd;
-
-      if (rec.category === 'approve') {
-        item.ventas += 1;
-        item.sumApprovedUsd += rec.priceUsd;
-      } else if (rec.category === 'reject') {
-        item.rechazos += 1;
-      } else if (rec.category === 'trash') {
-        item.trash += 1;
-      } else {
-        item.pending += 1;
-      }
+      const numA = Number(valA) || 0;
+      const numB = Number(valB) || 0;
+      if (numA === numB) return (b.ventas || 0) - (a.ventas || 0);
+      return sortOrder === 'asc' ? numA - numB : numB - numA;
     });
-
-    const list = Array.from(map.values()).map((item) => {
-      const checkUsd =
-        item.ventas > 0
-          ? item.sumApprovedUsd / item.ventas
-          : item.leads > 0
-          ? item.sumAllUsd / item.leads
-          : 0;
-      const approvalPct = item.leads > 0 ? (item.ventas / item.leads) * 100 : 0;
-      const rejectPct = item.leads > 0 ? (item.rechazos / item.leads) * 100 : 0;
-      const trashPct = item.leads > 0 ? (item.trash / item.leads) * 100 : 0;
-
-      return {
-        ...item,
-        operadoresCount: item.operatorsSet.size,
-        checkUsd,
-        approvalPct,
-        rejectPct,
-        trashPct,
-      };
-    });
-
-    return sortCollection(list);
   }, [filteredRecords, sortField, sortOrder]);
 
-  // 6. Agrupación POR CAMPAÑA / PAÍS (Estilo NEW REPORT)
-  const campaignStats = useMemo(() => {
-    const map = new Map();
-
-    filteredRecords.forEach((rec) => {
-      const key = rec.country;
-      if (!map.has(key)) {
-        map.set(key, {
-          country: key,
-          operador: key,
-          teamLeader: key,
-          operatorsSet: new Set(),
-          tlSet: new Set(),
-          leads: 0,
-          ventas: 0,
-          rechazos: 0,
-          trash: 0,
-          pending: 0,
-          sumApprovedUsd: 0,
-          sumAllUsd: 0,
-        });
-      }
-      const item = map.get(key);
-      item.operatorsSet.add(rec.usuario);
-      if (rec.teamLeader !== 'Sin asignar') item.tlSet.add(rec.teamLeader);
-      item.leads += 1;
-      item.sumAllUsd += rec.priceUsd;
-
-      if (rec.category === 'approve') {
-        item.ventas += 1;
-        item.sumApprovedUsd += rec.priceUsd;
-      } else if (rec.category === 'reject') {
-        item.rechazos += 1;
-      } else if (rec.category === 'trash') {
-        item.trash += 1;
-      } else {
-        item.pending += 1;
-      }
-    });
-
-    const list = Array.from(map.values()).map((item) => {
-      const checkUsd =
-        item.ventas > 0
-          ? item.sumApprovedUsd / item.ventas
-          : item.leads > 0
-          ? item.sumAllUsd / item.leads
-          : 0;
-      const approvalPct = item.leads > 0 ? (item.ventas / item.leads) * 100 : 0;
-      const rejectPct = item.leads > 0 ? (item.rechazos / item.leads) * 100 : 0;
-      const trashPct = item.leads > 0 ? (item.trash / item.leads) * 100 : 0;
-
-      return {
-        ...item,
-        operadoresCount: item.operatorsSet.size,
-        tlCount: item.tlSet.size,
-        checkUsd,
-        approvalPct,
-        rejectPct,
-        trashPct,
-      };
-    });
-
-    return sortCollection(list);
-  }, [filteredRecords, sortField, sortOrder]);
-
-  // Totales Globales (GRAND TOTAL)
+  // Totales Globales (KPIs)
   const globalTotals = useMemo(() => {
     let leads = 0;
     let ventas = 0;
@@ -624,24 +533,18 @@ export default function App() {
     };
   }, [filteredRecords]);
 
-  // Datos para los gráficos según la pestaña activa
-  const chartItems = useMemo(() => {
-    const source =
-      activeTab === 'operador'
-        ? operatorStats
-        : activeTab === 'tl'
-        ? teamLeaderStats
-        : campaignStats;
-    return source.slice(0, 8);
-  }, [activeTab, operatorStats, teamLeaderStats, campaignStats]);
+  // Datos para los gráficos en la parte baja (hasta 20 operadores)
+  const chartItems = useMemo(() => operatorStats.slice(0, 20), [operatorStats]);
 
-  const maxLeadsInChart = useMemo(() => {
-    return Math.max(...chartItems.map((i) => i.leads || 1), 1);
-  }, [chartItems]);
+  const maxLeadsInChart = useMemo(
+    () => Math.max(...chartItems.map((i) => i.leads || 1), 1),
+    [chartItems]
+  );
 
-  const maxCheckInChart = useMemo(() => {
-    return Math.max(...chartItems.map((i) => i.checkUsd || 1), 100);
-  }, [chartItems]);
+  const maxCheckInChart = useMemo(
+    () => Math.max(...chartItems.map((i) => i.checkUsd || 1), 100),
+    [chartItems]
+  );
 
   const getFlag = (countryName) => {
     const clean = String(countryName || '')
@@ -652,689 +555,840 @@ export default function App() {
     return COUNTRY_FLAGS[clean] || '🌎';
   };
 
+  // Operador activo en vista Drill-down
+  const activeOperatorDetail = useMemo(() => {
+    if (!selectedOperatorCode) return null;
+    const stats = operatorStats.find((o) => o.usuario === selectedOperatorCode);
+    const records = enrichedRecords.filter((r) => r.usuario === selectedOperatorCode);
+    return { stats, records };
+  }, [selectedOperatorCode, operatorStats, enrichedRecords]);
+
   return (
-    <div className="gtl-container">
-      {/* CABECERA EJECUTIVA */}
-      <header className="gtl-header">
-        <div className="gtl-brand">
-          <span className="gtl-brand-badge">GESTION TL</span>
-          <div>
-            <h1 className="gtl-title">Panel Ejecutivo de Operaciones</h1>
-            <p className="gtl-subtitle">
-              Control de Ventas (Approve), Rechazos, Trash y Check Promedio (USD)
-            </p>
+    <div className="gtl-layout">
+      {/* Overlay oscuro para celulares */}
+      <div
+        className={`gtl-sidebar-overlay ${mobileMenuOpen ? 'active' : ''}`}
+        onClick={() => setMobileMenuOpen(false)}
+      />
+
+      {/* SIDEBAR RETRÁCTIL */}
+      <aside
+        className={`gtl-sidebar ${sidebarCollapsed ? 'collapsed' : ''} ${
+          mobileMenuOpen ? 'mobile-open' : ''
+        }`}
+      >
+        <div className="gtl-sidebar-top">
+          <div className="gtl-sidebar-brand">
+            <span className="gtl-sidebar-badge">GTL</span>
+            <span className="gtl-sidebar-title">GESTION TL</span>
+          </div>
+          <button
+            className="gtl-collapse-btn"
+            onClick={() => setSidebarCollapsed((c) => !c)}
+            title={sidebarCollapsed ? 'Expandir Sidebar' : 'Contraer Sidebar'}
+          >
+            {sidebarCollapsed ? '▶' : '◀'}
+          </button>
+        </div>
+
+        <nav className="gtl-sidebar-nav">
+          <div
+            className={`gtl-nav-item ${!showConfigModal ? 'active' : ''}`}
+            onClick={() => {
+              setSelectedOperatorCode(null);
+              setShowConfigModal(false);
+              setMobileMenuOpen(false);
+            }}
+            title="Operadores"
+          >
+            <div className="gtl-nav-item-left">
+              <span>🎧</span>
+              <span className="gtl-nav-text">Operadores</span>
+            </div>
+            <span className="gtl-nav-count">{operatorStats.length}</span>
+          </div>
+        </nav>
+
+        {/* Parte baja del Sidebar: Estado de sincronización y Botón de Configuración */}
+        <div className="gtl-sidebar-footer">
+          <div className="gtl-sync-status">
+            <span>{loadingSheets ? '⏳' : '🟢'}</span>
+            <span>
+              {loadingSheets
+                ? 'Actualizando datos...'
+                : `${bd1Data.length} filas sincronizadas`}
+            </span>
+          </div>
+
+          <div
+            className="gtl-nav-item"
+            onClick={() => {
+              handleSyncGoogleSheets(false);
+              setMobileMenuOpen(false);
+            }}
+            title="Refrescar datos de Google Sheets ahora"
+          >
+            <div className="gtl-nav-item-left">
+              <span>🔄</span>
+              <span className="gtl-nav-text">Actualizar Datos</span>
+            </div>
+          </div>
+
+          <div
+            className={`gtl-nav-item ${showConfigModal ? 'active' : ''}`}
+            onClick={() => {
+              setShowConfigModal((v) => !v);
+              setMobileMenuOpen(false);
+            }}
+            title="Configuración y Tipos de Cambio"
+          >
+            <div className="gtl-nav-item-left">
+              <span>⚙️</span>
+              <span className="gtl-nav-text">Configuración</span>
+            </div>
           </div>
         </div>
+      </aside>
 
-        <div className="gtl-header-actions">
-          <span className="gtl-pill">
-            {globalTotals.leads} Leads | Check Global: ${globalTotals.checkUsd.toFixed(2)} USD
-          </span>
-
-          <button
-            className="gtl-btn-secondary"
-            onClick={() => setShowRatesConfig((v) => !v)}
-          >
-            💱 Tipos de Cambio
-          </button>
-
-          <button
-            className="gtl-btn-secondary"
-            onClick={() => setShowDataConfig((v) => !v)}
-          >
-            {showDataConfig ? '▲ Ocultar Carga' : '▼ Cargar Datos'}
-          </button>
-
-          <button
-            className="gtl-theme-btn"
-            onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-          >
-            {theme === 'dark' ? '☀️ Modo Claro' : '🌙 Modo Oscuro'}
-          </button>
-        </div>
-      </header>
-
-      {/* PANEL DESPLEGABLE: TIPOS DE CAMBIO POR CAMPAÑA */}
-      {showRatesConfig && (
-        <div className="gtl-card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <strong style={{ fontSize: '14px' }}>
-              💱 Configuración de Tipo de Cambio por País (Moneda Local por 1 USD)
-            </strong>
+      {/* CONTENIDO PRINCIPAL ADAPTABLE AL 100% */}
+      <main className="gtl-main">
+        {/* CABECERA EJECUTIVA */}
+        <header className="gtl-header">
+          <div className="gtl-brand">
             <button
-              className="gtl-btn-secondary"
-              onClick={() => setCountryRates(DEFAULT_RATES)}
+              className="gtl-mobile-btn"
+              onClick={() => setMobileMenuOpen(true)}
+              title="Abrir menú"
             >
-              Restaurar valores por defecto
+              ☰
+            </button>
+            <span className="gtl-brand-badge">GESTION TL</span>
+            <div>
+              <h1 className="gtl-title">Panel Operativo</h1>
+              <p className="gtl-subtitle">
+                Control de Ventas (Approve), Rechazos, Trash y Check Promedio (USD)
+              </p>
+            </div>
+          </div>
+
+          <div className="gtl-header-actions">
+            <span className="gtl-pill">
+              {globalTotals.leads} Leads | Check Global: ${globalTotals.checkUsd.toFixed(2)} USD
+            </span>
+
+            <button
+              className="gtl-theme-btn"
+              onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+            >
+              {theme === 'dark' ? '☀️ Modo Claro' : '🌙 Modo Oscuro'}
             </button>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(135px, 1fr))', gap: '10px' }}>
-            {Object.keys(DEFAULT_RATES)
-              .filter((k) => k !== 'DEFAULT')
-              .map((countryKey) => (
-                <div key={countryKey}>
-                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
-                    {getFlag(countryKey)} {countryKey}
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="gtl-input"
-                    value={countryRates[countryKey] ?? ''}
-                    onChange={(e) =>
-                      setCountryRates((prev) => ({
-                        ...prev,
-                        [countryKey]: e.target.value,
-                      }))
-                    }
-                  />
-                </div>
-              ))}
-          </div>
-        </div>
-      )}
+        </header>
 
-      {/* PANEL DESPLEGABLE: SINCRONIZACIÓN CON GOOGLE SHEETS Y EXCEL */}
-      {showDataConfig && (
-        <div className="gtl-card">
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '10px', alignItems: 'end', marginBottom: '14px' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
-                ENLACE DE GOOGLE SHEETS (ACCESO: CUALQUIER PERSONA CON EL ENLACE)
-              </label>
-              <input
-                type="text"
-                className="gtl-input"
-                placeholder="https://docs.google.com/spreadsheets/d/..."
-                value={sheetUrl}
-                onChange={(e) => setSheetUrl(e.target.value)}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
-                PESTAÑA VENTAS (BD1)
-              </label>
-              <input
-                type="text"
-                className="gtl-input"
-                value={bd1SheetName}
-                onChange={(e) => setBd1SheetName(e.target.value)}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
-                PESTAÑA EQUIPO (BD2)
-              </label>
-              <input
-                type="text"
-                className="gtl-input"
-                value={bd2SheetName}
-                onChange={(e) => setBd2SheetName(e.target.value)}
-              />
-            </div>
-            <button
-              className="gtl-btn-primary"
-              onClick={handleSyncGoogleSheets}
-              disabled={loadingSheets}
-            >
-              {loadingSheets ? 'Sincronizando...' : 'Sincronizar Google Sheets'}
-            </button>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-color)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
-              <span style={{ fontSize: '12px', fontWeight: 600 }}>
-                📂 BD1 Local (Opcional): <strong style={{ color: 'var(--accent-Warm)' }}>{bd1Data.length} filas</strong>
-              </span>
-              <input type="file" accept=".xls,.xlsx,.csv" onChange={(e) => handleFileUpload(e, 'bd1')} style={{ fontSize: '12px' }} />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
-              <span style={{ fontSize: '12px', fontWeight: 600 }}>
-                📂 BD2 Local (Opcional): <strong style={{ color: 'var(--accent-Warm)' }}>{operatorDirectory.size} operadores</strong>
-              </span>
-              <input type="file" accept=".xls,.xlsx,.csv" onChange={(e) => handleFileUpload(e, 'bd2')} style={{ fontSize: '12px' }} />
-            </div>
-          </div>
-
-          {statusMessage.text && (
-            <div
-              style={{
-                marginTop: '12px',
-                padding: '10px 14px',
-                borderRadius: '8px',
-                fontSize: '13px',
-                fontWeight: 600,
-                background: statusMessage.type === 'error' ? 'var(--badge-red-bg)' : 'var(--badge-green-bg)',
-                color: statusMessage.type === 'error' ? 'var(--badge-red-text)' : 'var(--badge-green-text)',
-              }}
-            >
-              {statusMessage.text}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* TARJETAS DE INDICADORES CLAVE (KPIs) */}
-      <div className="gtl-kpi-grid">
-        <div className="gtl-kpi-card">
-          <div className="gtl-kpi-label">Total Leads</div>
-          <div className="gtl-kpi-value">{globalTotals.leads}</div>
-          <div className="gtl-kpi-sub">
-            {globalTotals.operadores} operadores | {globalTotals.teamLeaders} TLs
-          </div>
-        </div>
-
-        <div className="gtl-kpi-card">
-          <div className="gtl-kpi-label">Ventas (Approve)</div>
-          <div className="gtl-kpi-value" style={{ color: 'var(--badge-green-text)' }}>
-            {globalTotals.ventas}
-          </div>
-          <div className="gtl-kpi-sub">
-            {globalTotals.approvalPct.toFixed(1)}% de conversión
-          </div>
-        </div>
-
-        <div className="gtl-kpi-card">
-          <div className="gtl-kpi-label">Rechazos (Reject)</div>
-          <div className="gtl-kpi-value" style={{ color: 'var(--badge-red-text)' }}>
-            {globalTotals.rechazos}
-          </div>
-          <div className="gtl-kpi-sub">{globalTotals.rejectPct.toFixed(1)}% del total</div>
-        </div>
-
-        <div className="gtl-kpi-card">
-          <div className="gtl-kpi-label">Trash / Basura</div>
-          <div className="gtl-kpi-value" style={{ color: 'var(--badge-amber-text)' }}>
-            {globalTotals.trash}
-          </div>
-          <div className="gtl-kpi-sub">{globalTotals.trashPct.toFixed(1)}% del total</div>
-        </div>
-
-        <div className="gtl-kpi-card">
-          <div className="gtl-kpi-label">Check Promedio (USD)</div>
-          <div className="gtl-kpi-value" style={{ color: 'var(--accent-Warm)' }}>
-            ${globalTotals.checkUsd.toFixed(2)}
-          </div>
-          <div className="gtl-kpi-sub">Ticket promedio en dólares</div>
-        </div>
-      </div>
-
-      {/* GRÁFICOS VISUALES DE BARRAS */}
-      {chartItems.length > 0 && (
-        <div className="gtl-charts-grid">
-          {/* Gráfico 1: Volumen de Ventas, Rechazos y Trash */}
-          <div className="gtl-card" style={{ marginBottom: 0 }}>
+        {/* PANEL DE CONFIGURACIÓN (Solo se abre si tocas "Configuración" abajo en el Sidebar) */}
+        {showConfigModal && (
+          <div className="gtl-card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <strong style={{ fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                📊 Distribución: Ventas vs Rechazos y Trash (Top 8)
+              <strong style={{ fontSize: '14px', textTransform: 'uppercase' }}>
+                ⚙️ Configuración de Conexión Automática y Tipos de Cambio
               </strong>
-              <div style={{ display: 'flex', gap: '10px', fontSize: '11px' }}>
-                <span>🟢 Approve</span>
-                <span>🔴 Reject</span>
-                <span>🟤 Trash</span>
+              <button
+                className="gtl-btn-secondary"
+                onClick={() => setShowConfigModal(false)}
+              >
+                ✕ Cerrar
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px', alignItems: 'end', marginBottom: '16px' }}>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
+                  ENLACE DE GOOGLE SHEETS (SE CONSULTA AUTOMÁTICAMENTE AL ABRIR LA WEB)
+                </label>
+                <input
+                  type="text"
+                  className="gtl-input"
+                  value={sheetUrl}
+                  onChange={(e) => setSheetUrl(e.target.value)}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
+                  PESTAÑA VENTAS (BD1)
+                </label>
+                <input
+                  type="text"
+                  className="gtl-input"
+                  value={bd1SheetName}
+                  onChange={(e) => setBd1SheetName(e.target.value)}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
+                  PESTAÑA EQUIPO (BD2)
+                </label>
+                <input
+                  type="text"
+                  className="gtl-input"
+                  value={bd2SheetName}
+                  onChange={(e) => setBd2SheetName(e.target.value)}
+                />
+              </div>
+              <button
+                className="gtl-btn-primary"
+                onClick={() => handleSyncGoogleSheets(false)}
+                disabled={loadingSheets}
+              >
+                {loadingSheets ? 'Sincronizando...' : 'Guardar y Sincronizar'}
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px', padding: '12px 0', borderTop: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', marginBottom: '14px' }}>
+              <div>
+                <span style={{ fontSize: '12px', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
+                  📂 Subir BD1 Local (Opcional): <strong style={{ color: 'var(--accent-Warm)' }}>{bd1Data.length} filas</strong>
+                </span>
+                <input type="file" accept=".xls,.xlsx,.csv" onChange={(e) => handleFileUpload(e, 'bd1')} style={{ fontSize: '12px' }} />
+              </div>
+              <div>
+                <span style={{ fontSize: '12px', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
+                  📂 Subir BD2 Local (Opcional): <strong style={{ color: 'var(--accent-Warm)' }}>{operatorDirectory.size} operadores</strong>
+                </span>
+                <input type="file" accept=".xls,.xlsx,.csv" onChange={(e) => handleFileUpload(e, 'bd2')} style={{ fontSize: '12px' }} />
               </div>
             </div>
 
-            {chartItems.map((item, idx) => {
-              const label =
-                activeTab === 'operador'
-                  ? item.operador
-                  : activeTab === 'tl'
-                  ? item.teamLeader
-                  : `${getFlag(item.country)} ${item.country}`;
-              const wApprove = (item.ventas / maxLeadsInChart) * 100;
-              const wReject = (item.rechazos / maxLeadsInChart) * 100;
-              const wTrash = (item.trash / maxLeadsInChart) * 100;
-
-              return (
-                <div className="gtl-bar-row" key={idx}>
-                  <div className="gtl-bar-label" title={label}>
-                    {label}
-                  </div>
-                  <div className="gtl-bar-track">
-                    <div
-                      className="gtl-bar-fill-approve"
-                      style={{ width: `${wApprove}%` }}
-                      title={`Ventas: ${item.ventas}`}
-                    />
-                    <div
-                      className="gtl-bar-fill-reject"
-                      style={{ width: `${wReject}%` }}
-                      title={`Rechazos: ${item.rechazos}`}
-                    />
-                    <div
-                      className="gtl-bar-fill-trash"
-                      style={{ width: `${wTrash}%` }}
-                      title={`Trash: ${item.trash}`}
+            {/* Tipos de Cambio */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <strong style={{ fontSize: '13px' }}>💱 Tipos de Cambio por País (Moneda Local / 1 USD)</strong>
+              <button className="gtl-btn-secondary" onClick={() => setCountryRates(DEFAULT_RATES)}>
+                Restaurar por defecto
+              </button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px' }}>
+              {Object.keys(DEFAULT_RATES)
+                .filter((k) => k !== 'DEFAULT')
+                .map((countryKey) => (
+                  <div key={countryKey}>
+                    <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
+                      {getFlag(countryKey)} {countryKey}
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="gtl-input"
+                      value={countryRates[countryKey] ?? ''}
+                      onChange={(e) =>
+                        setCountryRates((prev) => ({
+                          ...prev,
+                          [countryKey]: e.target.value,
+                        }))
+                      }
                     />
                   </div>
-                  <div style={{ textAlign: 'right', fontWeight: 700 }}>
-                    {item.ventas} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>/ {item.leads}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Gráfico 2: Comparativa de Check (USD) */}
-          <div className="gtl-card" style={{ marginBottom: 0 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <strong style={{ fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                💵 Comparativa de Check Promedio (USD)
-              </strong>
-              <span style={{ fontSize: '11px', color: 'var(--accent-Warm)', fontWeight: 700 }}>
-                Global: ${globalTotals.checkUsd.toFixed(2)}
-              </span>
+                ))}
             </div>
 
-            {chartItems.map((item, idx) => {
-              const label =
-                activeTab === 'operador'
-                  ? item.operador
-                  : activeTab === 'tl'
-                  ? item.teamLeader
-                  : `${getFlag(item.country)} ${item.country}`;
-              const wCheck = Math.min((item.checkUsd / maxCheckInChart) * 100, 100);
+            {statusMessage.text && (
+              <div
+                style={{
+                  marginTop: '12px',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  background: statusMessage.type === 'error' ? 'var(--badge-red-bg)' : 'var(--badge-green-bg)',
+                  color: statusMessage.type === 'error' ? 'var(--badge-red-text)' : 'var(--badge-green-text)',
+                }}
+              >
+                {statusMessage.text}
+              </div>
+            )}
+          </div>
+        )}
 
-              return (
-                <div className="gtl-bar-row" key={idx}>
-                  <div className="gtl-bar-label" title={label}>
-                    {label}
-                  </div>
-                  <div className="gtl-bar-track">
-                    <div
-                      className="gtl-bar-fill-check"
-                      style={{ width: `${wCheck}%` }}
-                    />
-                  </div>
-                  <div style={{ textAlign: 'right', fontWeight: 800, color: 'var(--accent-Warm)' }}>
-                    ${item.checkUsd.toFixed(2)}
-                  </div>
+        {/* ==================================================================== */}
+        {/* VISTA DRILL-DOWN: PERFIL PERSONALIZADO DE UN OPERADOR                */}
+        {/* ==================================================================== */}
+        {selectedOperatorCode && activeOperatorDetail?.stats ? (
+          <div>
+            <button
+              className="gtl-btn-secondary"
+              style={{ marginBottom: '18px', padding: '10px 16px', fontSize: '13px', fontWeight: 700 }}
+              onClick={() => setSelectedOperatorCode(null)}
+            >
+              ← Volver a la Tabla General de Operadores
+            </button>
+
+            {/* Encabezado del Operador */}
+            <div className="gtl-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+              <div>
+                <span className="gtl-pill" style={{ fontSize: '11px', marginBottom: '8px', display: 'inline-block' }}>
+                  USUARIO: {activeOperatorDetail.stats.usuario}
+                </span>
+                <h2 style={{ margin: '6px 0 4px', fontSize: '24px', fontWeight: 800 }}>
+                  {activeOperatorDetail.stats.operador}
+                </h2>
+                <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  Team Leader: <strong>{activeOperatorDetail.stats.teamLeader}</strong> | Campaña: <strong>{getFlag(activeOperatorDetail.stats.country)} {activeOperatorDetail.stats.country}</strong>
+                </p>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
+                  Check Promedio del Operador
                 </div>
-              );
-            })}
+                <div style={{ fontSize: '30px', fontWeight: 800, color: 'var(--accent-Warm)' }}>
+                  ${activeOperatorDetail.stats.checkUsd.toFixed(2)} USD
+                </div>
+              </div>
+            </div>
+
+            {/* Tarjetas KPI del Operador */}
+            <div className="gtl-kpi-grid">
+              <div className="gtl-kpi-card">
+                <div className="gtl-kpi-label">Total Leads</div>
+                <div className="gtl-kpi-value">{activeOperatorDetail.stats.leads}</div>
+                <div className="gtl-kpi-sub">Órdenes asignadas</div>
+              </div>
+              <div className="gtl-kpi-card">
+                <div className="gtl-kpi-label">Ventas (Approve)</div>
+                <div className="gtl-kpi-value" style={{ color: 'var(--badge-green-text)' }}>
+                  {activeOperatorDetail.stats.ventas}
+                </div>
+                <div className="gtl-kpi-sub">
+                  {activeOperatorDetail.stats.approvalPct.toFixed(1)}% de conversión
+                </div>
+              </div>
+              <div className="gtl-kpi-card">
+                <div className="gtl-kpi-label">Rechazos (Reject)</div>
+                <div className="gtl-kpi-value" style={{ color: 'var(--badge-red-text)' }}>
+                  {activeOperatorDetail.stats.rechazos}
+                </div>
+                <div className="gtl-kpi-sub">
+                  {activeOperatorDetail.stats.rejectPct.toFixed(1)}% del total
+                </div>
+              </div>
+              <div className="gtl-kpi-card">
+                <div className="gtl-kpi-label">Trash / Basura</div>
+                <div className="gtl-kpi-value" style={{ color: 'var(--badge-amber-text)' }}>
+                  {activeOperatorDetail.stats.trash}
+                </div>
+                <div className="gtl-kpi-sub">
+                  {activeOperatorDetail.stats.trashPct.toFixed(1)}% del total
+                </div>
+              </div>
+              <div className="gtl-kpi-card">
+                <div className="gtl-kpi-label">Check Promedio (USD)</div>
+                <div className="gtl-kpi-value" style={{ color: 'var(--accent-Warm)' }}>
+                  ${activeOperatorDetail.stats.checkUsd.toFixed(2)}
+                </div>
+                <div className="gtl-kpi-sub">Ticket promedio en dólares</div>
+              </div>
+            </div>
+
+            {/* Cuadros Gráficos del Operador */}
+            <div className="gtl-charts-grid" style={{ marginTop: 0, marginBottom: '20px' }}>
+              <div className="gtl-card" style={{ marginBottom: 0 }}>
+                <strong style={{ display: 'block', fontSize: '14px', textTransform: 'uppercase', marginBottom: '14px' }}>
+                  📊 Proporción de Resultados de {activeOperatorDetail.stats.operador}
+                </strong>
+                <div className="gtl-bar-track" style={{ height: '24px', marginBottom: '12px' }}>
+                  <div
+                    className="gtl-bar-fill-approve"
+                    style={{ width: `${activeOperatorDetail.stats.approvalPct}%` }}
+                    title={`Approve: ${activeOperatorDetail.stats.ventas}`}
+                  />
+                  <div
+                    className="gtl-bar-fill-reject"
+                    style={{ width: `${activeOperatorDetail.stats.rejectPct}%` }}
+                    title={`Reject: ${activeOperatorDetail.stats.rechazos}`}
+                  />
+                  <div
+                    className="gtl-bar-fill-trash"
+                    style={{ width: `${activeOperatorDetail.stats.trashPct}%` }}
+                    title={`Trash: ${activeOperatorDetail.stats.trash}`}
+                  />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', fontSize: '12px', fontWeight: 700 }}>
+                  <span style={{ color: 'var(--badge-green-text)' }}>
+                    🟢 Approve: {activeOperatorDetail.stats.ventas} ({activeOperatorDetail.stats.approvalPct.toFixed(1)}%)
+                  </span>
+                  <span style={{ color: 'var(--badge-red-text)' }}>
+                    🔴 Reject: {activeOperatorDetail.stats.rechazos} ({activeOperatorDetail.stats.rejectPct.toFixed(1)}%)
+                  </span>
+                  <span style={{ color: 'var(--badge-amber-text)' }}>
+                    🟤 Trash: {activeOperatorDetail.stats.trash} ({activeOperatorDetail.stats.trashPct.toFixed(1)}%)
+                  </span>
+                </div>
+              </div>
+
+              <div className="gtl-card" style={{ marginBottom: 0 }}>
+                <strong style={{ display: 'block', fontSize: '14px', textTransform: 'uppercase', marginBottom: '14px' }}>
+                  📈 Desglose por Categoría
+                </strong>
+                <div className="gtl-bar-row">
+                  <div className="gtl-bar-label">🟢 Ventas (Approve)</div>
+                  <div className="gtl-bar-track">
+                    <div className="gtl-bar-fill-approve" style={{ width: `${activeOperatorDetail.stats.approvalPct}%` }} />
+                  </div>
+                  <div style={{ textAlign: 'right', fontWeight: 700 }}>{activeOperatorDetail.stats.ventas}</div>
+                </div>
+                <div className="gtl-bar-row">
+                  <div className="gtl-bar-label">🔴 Rechazos (Reject)</div>
+                  <div className="gtl-bar-track">
+                    <div className="gtl-bar-fill-reject" style={{ width: `${activeOperatorDetail.stats.rejectPct}%` }} />
+                  </div>
+                  <div style={{ textAlign: 'right', fontWeight: 700 }}>{activeOperatorDetail.stats.rechazos}</div>
+                </div>
+                <div className="gtl-bar-row">
+                  <div className="gtl-bar-label">🟤 Trash / Basura</div>
+                  <div className="gtl-bar-track">
+                    <div className="gtl-bar-fill-trash" style={{ width: `${activeOperatorDetail.stats.trashPct}%` }} />
+                  </div>
+                  <div style={{ textAlign: 'right', fontWeight: 700 }}>{activeOperatorDetail.stats.trash}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Tabla de todas las órdenes gestionadas por este operador */}
+            <div className="gtl-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <strong style={{ fontSize: '14px', textTransform: 'uppercase' }}>
+                  📋 Ordenes tocadas por el operador {activeOperatorDetail.stats.operador} ({activeOperatorDetail.records.length} ordenes)
+                </strong>
+              </div>
+              <div className="gtl-table-scroll-20">
+                <table className="gtl-table">
+                  <thead>
+                    <tr>
+                      <th>N°</th>
+                      <th>N° Orden</th>
+                      <th>País</th>
+                      <th>Producto</th>
+                      <th>Estado CRM</th>
+                      <th>Clasificación</th>
+                      <th>Precio Local</th>
+                      <th>Check (USD)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeOperatorDetail.records.map((rec, idx) => (
+                      <tr key={idx}>
+                        <td>                        </td>
+                        <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>
+                          {rec.orderNumber || `#${idx + 1}`}
+                        </td>
+                        <td>
+                          {getFlag(rec.country)} {rec.country}
+                        </td>
+                        <td style={{ maxWidth: '280px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={rec.products}>
+                          {rec.products || '-'}
+                        </td>
+                        <td>{rec.rawStatus}</td>
+                        <td>
+                          <span
+                            className={`gtl-badge ${
+                              rec.category === 'approve'
+                                ? 'gtl-badge-green'
+                                : rec.category === 'reject'
+                                ? 'gtl-badge-red'
+                                : 'gtl-badge-amber'
+                            }`}
+                          >
+                            {rec.category.toUpperCase()}
+                          </span>
+                        </td>
+                        <td style={{ fontWeight: 600 }}>
+                          {rec.finalPriceLocal.toLocaleString()}
+                        </td>
+                        <td className="gtl-check-cell">${rec.priceUsd.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        ) : (
+          /* ==================================================================== */
+          /* VISTA PRINCIPAL DE OPERADORES:                                       */
+          /* 1. KPIs -> 2. Filtros y Tabla (20 ops) -> 3. Gráficos en parte baja  */
+          /* ==================================================================== */
+          <>
+            {/* 1. TARJETAS DE INDICADORES CLAVE (KPIs) */}
+            <div className="gtl-kpi-grid">
+              <div className="gtl-kpi-card">
+                <div className="gtl-kpi-label">Total Leads</div>
+                <div className="gtl-kpi-value">{globalTotals.leads}</div>
+                <div className="gtl-kpi-sub">
+                  {globalTotals.operadores} operadores | {globalTotals.teamLeaders} TLs
+                </div>
+              </div>
 
-      {/* PESTAÑAS DE VISTA */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
-        <div className="gtl-tabs">
-          <button
-            className={`gtl-tab ${activeTab === 'campana' ? 'active' : ''}`}
-            onClick={() => setActiveTab('campana')}
-          >
-            🌎 Por Campaña / País ({campaignStats.length})
-          </button>
-          <button
-            className={`gtl-tab ${activeTab === 'operador' ? 'active' : ''}`}
-            onClick={() => setActiveTab('operador')}
-          >
-            🎧 Por Operador ({operatorStats.length})
-          </button>
-          <button
-            className={`gtl-tab ${activeTab === 'tl' ? 'active' : ''}`}
-            onClick={() => setActiveTab('tl')}
-          >
-            👔 Por Team Leader ({teamLeaderStats.length})
-          </button>
-        </div>
-      </div>
+              <div className="gtl-kpi-card">
+                <div className="gtl-kpi-label">Ventas (Approve)</div>
+                <div className="gtl-kpi-value" style={{ color: 'var(--badge-green-text)' }}>
+                  {globalTotals.ventas}
+                </div>
+                <div className="gtl-kpi-sub">
+                  {globalTotals.approvalPct.toFixed(1)}% de conversión
+                </div>
+              </div>
 
-      {/* CONTENEDOR DE FILTROS, BOTONES DE ORDENAMIENTO Y TABLA */}
-      <div className="gtl-card">
-        {/* Barra de Búsqueda + Filtros + Botones de Ordenamiento */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', marginBottom: '14px' }}>
-          <div>
-            <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
-              CAMPAÑA / PAÍS
-            </label>
-            <select
-              className="gtl-select"
-              value={selectedCountry}
-              onChange={(e) => setSelectedCountry(e.target.value)}
-            >
-              {countriesList.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </div>
+              <div className="gtl-kpi-card">
+                <div className="gtl-kpi-label">Rechazos (Reject)</div>
+                <div className="gtl-kpi-value" style={{ color: 'var(--badge-red-text)' }}>
+                  {globalTotals.rechazos}
+                </div>
+                <div className="gtl-kpi-sub">
+                  {globalTotals.rejectPct.toFixed(1)}% del total
+                </div>
+              </div>
 
-          <div>
-            <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
-              FILTRAR POR TEAM LEADER
-            </label>
-            <select
-              className="gtl-select"
-              value={selectedTLFilter}
-              onChange={(e) => setSelectedTLFilter(e.target.value)}
-            >
-              {teamLeadersList.map((tl) => (
-                <option key={tl} value={tl}>
-                  {tl}
-                </option>
-              ))}
-            </select>
-          </div>
+              <div className="gtl-kpi-card">
+                <div className="gtl-kpi-label">Trash / Basura</div>
+                <div className="gtl-kpi-value" style={{ color: 'var(--badge-amber-text)' }}>
+                  {globalTotals.trash}
+                </div>
+                <div className="gtl-kpi-sub">
+                  {globalTotals.trashPct.toFixed(1)}% del total
+                </div>
+              </div>
 
-          <div style={{ gridColumn: 'span 2' }}>
-            <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
-              BUSCAR OPERADOR, USUARIO (PEROP1AM-...) O TEAM LEADER
-            </label>
-            <input
-              type="text"
-              className="gtl-input"
-              placeholder="Escribe un nombre, código de usuario o Team Leader..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-        </div>
+              <div className="gtl-kpi-card">
+                <div className="gtl-kpi-label">Check Promedio (USD)</div>
+                <div className="gtl-kpi-value" style={{ color: 'var(--accent-Warm)' }}>
+                  ${globalTotals.checkUsd.toFixed(2)}
+                </div>
+                <div className="gtl-kpi-sub">Ticket promedio en dólares</div>
+              </div>
+            </div>
 
-        {/* Botones de Ordenamiento Dinámico (Menor a Mayor / Mayor a Menor) */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: '8px',
-            padding: '10px 12px',
-            background: 'var(--bg-elevated)',
-            borderRadius: '8px',
-            marginBottom: '18px',
-          }}
-        >
-          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginRight: '4px' }}>
-            Ordenar por:
-          </span>
+            {/* 2. CONTENEDOR DE FILTROS, ORDENAMIENTO Y TABLA DE OPERADORES (PRIMERO) */}
+            <div className="gtl-card">
+              {/* Barra de Búsqueda y Filtros */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '12px', marginBottom: '14px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
+                    CAMPAÑA / PAÍS
+                  </label>
+                  <select
+                    className="gtl-select"
+                    value={selectedCountry}
+                    onChange={(e) => setSelectedCountry(e.target.value)}
+                  >
+                    {countriesList.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-          <button
-            className={`gtl-btn-secondary ${sortField === 'ventas' ? 'active' : ''}`}
-            onClick={() => handleSortClick('ventas')}
-          >
-            Ventas (Approve) {sortField === 'ventas' ? (sortOrder === 'desc' ? '↓ Mayor a menor' : '↑ Menor a mayor') : ''}
-          </button>
+                <div>
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
+                    FILTRAR POR TEAM LEADER
+                  </label>
+                  <select
+                    className="gtl-select"
+                    value={selectedTLFilter}
+                    onChange={(e) => setSelectedTLFilter(e.target.value)}
+                  >
+                    {teamLeadersList.map((tl) => (
+                      <option key={tl} value={tl}>
+                        {tl}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-          <button
-            className={`gtl-btn-secondary ${sortField === 'checkUsd' ? 'active' : ''}`}
-            onClick={() => handleSortClick('checkUsd')}
-          >
-            Check (USD) {sortField === 'checkUsd' ? (sortOrder === 'desc' ? '↓ Mayor a menor' : '↑ Menor a mayor') : ''}
-          </button>
+                <div style={{ gridColumn: 'span 2' }}>
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 700 }}>
+                    BUSCAR OPERADOR, USUARIO (PEROP1AM-...) O TEAM LEADER
+                  </label>
+                  <input
+                    type="text"
+                    className="gtl-input"
+                    placeholder="Escribe un nombre, código de usuario o Team Leader..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+              </div>
 
-          <button
-            className={`gtl-btn-secondary ${sortField === 'operador' ? 'active' : ''}`}
-            onClick={() => handleSortClick('operador')}
-          >
-            Nombre (A-Z) {sortField === 'operador' ? (sortOrder === 'asc' ? '↑ A-Z' : '↓ Z-A') : ''}
-          </button>
+              {/* Botones de Ordenamiento Dinámico */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '8px',
+                  padding: '10px 12px',
+                  background: 'var(--bg-elevated)',
+                  borderRadius: '8px',
+                  marginBottom: '14px',
+                }}
+              >
+                <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginRight: '4px' }}>
+                  Ordenar por:
+                </span>
 
-          <button
-            className={`gtl-btn-secondary ${sortField === 'teamLeader' ? 'active' : ''}`}
-            onClick={() => handleSortClick('teamLeader')}
-          >
-            Team Leader (A-Z) {sortField === 'teamLeader' ? (sortOrder === 'asc' ? '↑ A-Z' : '↓ Z-A') : ''}
-          </button>
+                <button
+                  className={`gtl-btn-secondary ${sortField === 'ventas' ? 'active' : ''}`}
+                  onClick={() => handleSortClick('ventas')}
+                >
+                  Ventas (Approve) {sortField === 'ventas' ? (sortOrder === 'desc' ? '↓ Mayor a menor' : '↑ Menor a mayor') : ''}
+                </button>
 
-          <button
-            className={`gtl-btn-secondary ${sortField === 'rechazos' ? 'active' : ''}`}
-            onClick={() => handleSortClick('rechazos')}
-          >
-            Rechazos {sortField === 'rechazos' ? (sortOrder === 'desc' ? '↓' : '↑') : ''}
-          </button>
+                <button
+                  className={`gtl-btn-secondary ${sortField === 'checkUsd' ? 'active' : ''}`}
+                  onClick={() => handleSortClick('checkUsd')}
+                >
+                  Check (USD) {sortField === 'checkUsd' ? (sortOrder === 'desc' ? '↓ Mayor a menor' : '↑ Menor a mayor') : ''}
+                </button>
 
-          <button
-            className={`gtl-btn-secondary ${sortField === 'trash' ? 'active' : ''}`}
-            onClick={() => handleSortClick('trash')}
-          >
-            Trash {sortField === 'trash' ? (sortOrder === 'desc' ? '↓' : '↑') : ''}
-          </button>
-        </div>
+                <button
+                  className={`gtl-btn-secondary ${sortField === 'operador' ? 'active' : ''}`}
+                  onClick={() => handleSortClick('operador')}
+                >
+                  Nombre (A-Z) {sortField === 'operador' ? (sortOrder === 'asc' ? '↑ A-Z' : '↓ Z-A') : ''}
+                </button>
 
-        {/* TABLA 1: POR OPERADOR */}
-        {activeTab === 'operador' && (
-          <div className="gtl-table-wrap">
-            <table className="gtl-table">
-              <thead>
-                <tr>
-                  <th>Team Leader</th>
-                  <th>Operador</th>
-                  <th>Usuario</th>
-                  <th>País</th>
-                  <th>Leads</th>
-                  <th>Approve (Ventas)</th>
-                  <th>% Aprob.</th>
-                  <th>Reject (Rechazos)</th>
-                  <th>Trash</th>
-                  <th>Check (USD)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {operatorStats.map((row) => (
-                  <tr key={row.usuario}>
-                    <td
-                      style={{
-                        fontWeight: 700,
-                        color: row.teamLeader === 'Sin asignar' ? 'var(--badge-red-text)' : 'var(--text-primary)',
-                      }}
-                    >
-                      {row.teamLeader}
-                    </td>
-                    <td style={{ fontWeight: 600 }}>{row.operador}</td>
-                    <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                      {row.usuario}
-                    </td>
-                    <td>
-                      {getFlag(row.country)} {row.country}
-                    </td>
-                    <td style={{ fontWeight: 600 }}>{row.leads}</td>
-                    <td>
-                      <span className="gtl-badge gtl-badge-green">{row.ventas}</span>
-                    </td>
-                    <td>
-                      <span
-                        className={`gtl-badge ${
-                          row.approvalPct >= 30 ? 'gtl-badge-green' : row.approvalPct >= 15 ? 'gtl-badge-amber' : 'gtl-badge-red'
-                        }`}
+                <button
+                  className={`gtl-btn-secondary ${sortField === 'teamLeader' ? 'active' : ''}`}
+                  onClick={() => handleSortClick('teamLeader')}
+                >
+                  Team Leader (A-Z) {sortField === 'teamLeader' ? (sortOrder === 'asc' ? '↑ A-Z' : '↓ Z-A') : ''}
+                </button>
+
+                <button
+                  className={`gtl-btn-secondary ${sortField === 'rechazos' ? 'active' : ''}`}
+                  onClick={() => handleSortClick('rechazos')}
+                >
+                  Rechazos {sortField === 'rechazos' ? (sortOrder === 'desc' ? '↓' : '↑') : ''}
+                </button>
+
+                <button
+                  className={`gtl-btn-secondary ${sortField === 'trash' ? 'active' : ''}`}
+                  onClick={() => handleSortClick('trash')}
+                >
+                  Trash {sortField === 'trash' ? (sortOrder === 'desc' ? '↓' : '↑') : ''}
+                </button>
+
+                <span style={{ marginLeft: 'auto', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  💡 Haz clic en cualquier operador para ver su detalle individual
+                </span>
+              </div>
+
+              {/* TABLA DE OPERADORES (Tamaño amplio para ~20 operadores en vista) */}
+              <div className="gtl-table-scroll-20">
+                <table className="gtl-table">
+                  <thead>
+                    <tr>
+                      <th>Team Leader</th>
+                      <th>Operador</th>
+                      <th>Usuario</th>
+                      <th>País</th>
+                      <th>Leads</th>
+                      <th>Approve (Ventas)</th>
+                      <th>% Aprob.</th>
+                      <th>Reject (Rechazos)</th>
+                      <th>Trash</th>
+                      <th>Check (USD)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {operatorStats.map((row) => (
+                      <tr
+                        key={row.usuario}
+                        className="clickable-row"
+                        onClick={() => {
+                          setSelectedOperatorCode(row.usuario);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
                       >
-                        {row.approvalPct.toFixed(1)}%
-                      </span>
-                    </td>
-                    <td>
-                      {row.rechazos > 0 ? (
-                        <span className="gtl-badge gtl-badge-red">
-                          {row.rechazos} ({row.rejectPct.toFixed(0)}%)
-                        </span>
-                      ) : (
-                        <span style={{ color: 'var(--text-muted)' }}>0 (0%)</span>
-                      )}
-                    </td>
-                    <td>
-                      {row.trash > 0 ? (
-                        <span className="gtl-badge gtl-badge-amber">
-                          {row.trash} ({row.trashPct.toFixed(0)}%)
-                        </span>
-                      ) : (
-                        <span style={{ color: 'var(--text-muted)' }}>0 (0%)</span>
-                      )}
-                    </td>
-                    <td className="gtl-check-cell">${row.checkUsd.toFixed(2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td colSpan={4}>GRAND TOTAL ({operatorStats.length} Operadores)</td>
-                  <td>{globalTotals.leads}</td>
-                  <td>{globalTotals.ventas}</td>
-                  <td>{globalTotals.approvalPct.toFixed(1)}%</td>
-                  <td>
-                    {globalTotals.rechazos} ({globalTotals.rejectPct.toFixed(0)}%)
-                  </td>
-                  <td>
-                    {globalTotals.trash} ({globalTotals.trashPct.toFixed(0)}%)
-                  </td>
-                  <td className="gtl-check-cell">${globalTotals.checkUsd.toFixed(2)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        )}
+                        <td
+                          style={{
+                            fontWeight: 700,
+                            color: row.teamLeader === 'Sin asignar' ? 'var(--badge-red-text)' : 'var(--text-primary)',
+                          }}
+                        >
+                          {row.teamLeader}
+                        </td>
+                        <td style={{ fontWeight: 700, textDecoration: 'underline', textDecorationColor: 'var(--accent-Warm)' }}>
+                          {row.operador}
+                        </td>
+                        <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          {row.usuario}
+                        </td>
+                        <td>
+                          {getFlag(row.country)} {row.country}
+                        </td>
+                        <td style={{ fontWeight: 600 }}>{row.leads}</td>
+                        <td>
+                          <span className="gtl-badge gtl-badge-green">{row.ventas}</span>
+                        </td>
+                        <td>
+                          <span
+                            className={`gtl-badge ${
+                              row.approvalPct >= 30
+                                ? 'gtl-badge-green'
+                                : row.approvalPct >= 15
+                                ? 'gtl-badge-amber'
+                                : 'gtl-badge-red'
+                            }`}
+                          >
+                            {row.approvalPct.toFixed(1)}%
+                          </span>
+                        </td>
+                        <td>
+                          {row.rechazos > 0 ? (
+                            <span className="gtl-badge gtl-badge-red">
+                              {row.rechazos} ({row.rejectPct.toFixed(0)}%)
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)' }}>0 (0%)</span>
+                          )}
+                        </td>
+                        <td>
+                          {row.trash > 0 ? (
+                            <span className="gtl-badge gtl-badge-amber">
+                              {row.trash} ({row.trashPct.toFixed(0)}%)
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)' }}>0 (0%)</span>
+                          )}
+                        </td>
+                        <td className="gtl-check-cell">${row.checkUsd.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colSpan={4}>GRAND TOTAL ({operatorStats.length} Operadores)</td>
+                      <td>{globalTotals.leads}</td>
+                      <td>{globalTotals.ventas}</td>
+                      <td>{globalTotals.approvalPct.toFixed(1)}%</td>
+                      <td>
+                        {globalTotals.rechazos} ({globalTotals.rejectPct.toFixed(0)}%)
+                      </td>
+                      <td>
+                        {globalTotals.trash} ({globalTotals.trashPct.toFixed(0)}%)
+                      </td>
+                      <td className="gtl-check-cell">${globalTotals.checkUsd.toFixed(2)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
 
-        {/* TABLA 2: POR TEAM LEADER */}
-        {activeTab === 'tl' && (
-          <div className="gtl-table-wrap">
-            <table className="gtl-table">
-              <thead>
-                <tr>
-                  <th>Team Leader</th>
-                  <th>Operadores Activos</th>
-                  <th>Leads</th>
-                  <th>Approve (Ventas)</th>
-                  <th>% Aprob.</th>
-                  <th>Reject (Rechazos)</th>
-                  <th>Trash</th>
-                  <th>Check (USD)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {teamLeaderStats.map((row) => (
-                  <tr key={row.teamLeader}>
-                    <td
-                      style={{
-                        fontWeight: 700,
-                        color: row.teamLeader === 'Sin asignar' ? 'var(--badge-red-text)' : 'var(--text-primary)',
-                      }}
-                    >
-                      {row.teamLeader}
-                    </td>
-                    <td style={{ fontWeight: 600 }}>{row.operadoresCount}</td>
-                    <td style={{ fontWeight: 600 }}>{row.leads}</td>
-                    <td>
-                      <span className="gtl-badge gtl-badge-green">{row.ventas}</span>
-                    </td>
-                    <td>
-                      <span
-                        className={`gtl-badge ${
-                          row.approvalPct >= 30 ? 'gtl-badge-green' : row.approvalPct >= 15 ? 'gtl-badge-amber' : 'gtl-badge-red'
-                        }`}
-                      >
-                        {row.approvalPct.toFixed(1)}%
-                      </span>
-                    </td>
-                    <td>
-                      {row.rechazos > 0 ? (
-                        <span className="gtl-badge gtl-badge-red">
-                          {row.rechazos} ({row.rejectPct.toFixed(0)}%)
-                        </span>
-                      ) : (
-                        <span style={{ color: 'var(--text-muted)' }}>0 (0%)</span>
-                      )}
-                    </td>
-                    <td>
-                      {row.trash > 0 ? (
-                        <span className="gtl-badge gtl-badge-amber">
-                          {row.trash} ({row.trashPct.toFixed(0)}%)
-                        </span>
-                      ) : (
-                        <span style={{ color: 'var(--text-muted)' }}>0 (0%)</span>
-                      )}
-                    </td>
-                    <td className="gtl-check-cell">${row.checkUsd.toFixed(2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td>GRAND TOTAL</td>
-                  <td>{globalTotals.operadores}</td>
-                  <td>{globalTotals.leads}</td>
-                  <td>{globalTotals.ventas}</td>
-                  <td>{globalTotals.approvalPct.toFixed(1)}%</td>
-                  <td>
-                    {globalTotals.rechazos} ({globalTotals.rejectPct.toFixed(0)}%)
-                  </td>
-                  <td>
-                    {globalTotals.trash} ({globalTotals.trashPct.toFixed(0)}%)
-                  </td>
-                  <td className="gtl-check-cell">${globalTotals.checkUsd.toFixed(2)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        )}
+            {/* 3. GRÁFICOS VISUALES EN LA PARTE BAJA (DESPUÉS DE LA TABLA) */}
+            {chartItems.length > 0 && (
+              <div className="gtl-charts-grid">
+                {/* Gráfico 1: Volumen de Ventas, Rechazos y Trash */}
+                <div className="gtl-card" style={{ marginBottom: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                    <strong style={{ fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      📊 Distribución: Ventas vs Rechazos y Trash (Top 20)
+                    </strong>
+                    <div style={{ display: 'flex', gap: '10px', fontSize: '11px' }}>
+                      <span>🟢 Approve</span>
+                      <span>🔴 Reject</span>
+                      <span>🟤 Trash</span>
+                    </div>
+                  </div>
 
-        {/* TABLA 3: POR CAMPAÑA / PAÍS (Estilo NEW REPORT) */}
-        {activeTab === 'campana' && (
-          <div className="gtl-table-wrap">
-            <table className="gtl-table">
-              <thead>
-                <tr>
-                  <th>Country / Campaña</th>
-                  <th>Team Leaders</th>
-                  <th>Operadores</th>
-                  <th>Leads</th>
-                  <th>Approve (Ventas)</th>
-                  <th>% Aprob.</th>
-                  <th>Reject (%)</th>
-                  <th>Trash (%)</th>
-                  <th>AVG Price / Check (USD)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {campaignStats.map((row) => (
-                  <tr key={row.country}>
-                    <td style={{ fontWeight: 700 }}>
-                      {getFlag(row.country)} {row.country}
-                    </td>
-                    <td>{row.tlCount}</td>
-                    <td>{row.operadoresCount}</td>
-                    <td style={{ fontWeight: 600 }}>{row.leads}</td>
-                    <td>
-                      <span className="gtl-badge gtl-badge-green">{row.ventas}</span>
-                    </td>
-                    <td>
-                      <span
-                        className={`gtl-badge ${
-                          row.approvalPct >= 30 ? 'gtl-badge-green' : row.approvalPct >= 15 ? 'gtl-badge-amber' : 'gtl-badge-red'
-                        }`}
+                  {chartItems.map((item) => {
+                    const wApprove = (item.ventas / maxLeadsInChart) * 100;
+                    const wReject = (item.rechazos / maxLeadsInChart) * 100;
+                    const wTrash = (item.trash / maxLeadsInChart) * 100;
+
+                    return (
+                      <div
+                        className="gtl-bar-row"
+                        key={item.usuario}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => {
+                          setSelectedOperatorCode(item.usuario);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
                       >
-                        {row.approvalPct.toFixed(1)}%
-                      </span>
-                    </td>
-                    <td>
-                      {row.rechazos} ({row.rejectPct.toFixed(0)}%)
-                    </td>
-                    <td>
-                      {row.trash} ({row.trashPct.toFixed(0)}%)
-                    </td>
-                    <td className="gtl-check-cell">${row.checkUsd.toFixed(2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td>GRAND TOTAL</td>
-                  <td>{globalTotals.teamLeaders}</td>
-                  <td>{globalTotals.operadores}</td>
-                  <td>{globalTotals.leads}</td>
-                  <td>{globalTotals.ventas}</td>
-                  <td>{globalTotals.approvalPct.toFixed(1)}%</td>
-                  <td>
-                    {globalTotals.rechazos} ({globalTotals.rejectPct.toFixed(0)}%)
-                  </td>
-                  <td>
-                    {globalTotals.trash} ({globalTotals.trashPct.toFixed(0)}%)
-                  </td>
-                  <td className="gtl-check-cell">${globalTotals.checkUsd.toFixed(2)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+                        <div className="gtl-bar-label" title={item.operador}>
+                          {item.operador}
+                        </div>
+                        <div className="gtl-bar-track">
+                          <div
+                            className="gtl-bar-fill-approve"
+                            style={{ width: `${wApprove}%` }}
+                            title={`Ventas: ${item.ventas}`}
+                          />
+                          <div
+                            className="gtl-bar-fill-reject"
+                            style={{ width: `${wReject}%` }}
+                            title={`Rechazos: ${item.rechazos}`}
+                          />
+                          <div
+                            className="gtl-bar-fill-trash"
+                            style={{ width: `${wTrash}%` }}
+                            title={`Trash: ${item.trash}`}
+                          />
+                        </div>
+                        <div style={{ textAlign: 'right', fontWeight: 700 }}>
+                          {item.ventas}{' '}
+                          <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
+                            / {item.leads}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Gráfico 2: Comparativa de Check (USD) */}
+                <div className="gtl-card" style={{ marginBottom: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                    <strong style={{ fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      💵 Comparativa de Check Promedio (USD)
+                    </strong>
+                    <span style={{ fontSize: '11px', color: 'var(--accent-Warm)', fontWeight: 700 }}>
+                      Global: ${globalTotals.checkUsd.toFixed(2)}
+                    </span>
+                  </div>
+
+                  {chartItems.map((item) => {
+                    const wCheck = Math.min((item.checkUsd / maxCheckInChart) * 100, 100);
+
+                    return (
+                      <div
+                        className="gtl-bar-row"
+                        key={item.usuario}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => {
+                          setSelectedOperatorCode(item.usuario);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                      >
+                        <div className="gtl-bar-label" title={item.operador}>
+                          {item.operador}
+                        </div>
+                        <div className="gtl-bar-track">
+                          <div
+                            className="gtl-bar-fill-check"
+                            style={{ width: `${wCheck}%` }}
+                          />
+                        </div>
+                        <div style={{ textAlign: 'right', fontWeight: 800, color: 'var(--accent-Warm)' }}>
+                          ${item.checkUsd.toFixed(2)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
         )}
-      </div>
+      </main>
     </div>
   );
 }
