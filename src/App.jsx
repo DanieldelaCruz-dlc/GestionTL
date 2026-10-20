@@ -134,6 +134,34 @@ export default function App() {
 
   // Drill-down: Operador seleccionado para ver su reporte individual
   const [selectedOperatorCode, setSelectedOperatorCode] = useState(null);
+  
+  // Estados para la tabla de órdenes dentro del detalle del operador
+  const [opOrderSearch, setOpOrderSearch] = useState('');
+  const [opOrderCategory, setOpOrderCategory] = useState('all'); // 'all' | 'approve' | 'reject' | 'trash'
+  const [opOrderSortField, setOpOrderSortField] = useState('orderNumber'); // 'orderNumber' | 'priceUsd' | 'finalPriceLocal' | 'country'
+  const [opOrderSortDir, setOpOrderSortDir] = useState('desc'); // 'asc' | 'desc'
+  const [defaultOrderAction, setDefaultOrderAction] = useState('llenado'); // 'llenado' | 'escuchar'
+  const [rowOrderActions, setRowOrderActions] = useState({}); // { [orderId]: 'llenado' | 'escuchar' }
+
+  const handleOpOrderSort = (field) => {
+    if (opOrderSortField === field) {
+      setOpOrderSortDir((prev) => (prev === 'desc' ? 'asc' : 'desc'));
+    } else {
+      setOpOrderSortField(field);
+      setOpOrderSortDir(field === 'country' ? 'asc' : 'desc');
+    }
+  };
+
+  // Construye el link exacto de 2wcall y lo abre en otra pestaña
+  const open2wCallOrder = (rawOrderNum, actionMode) => {
+    const cleanId = String(rawOrderNum || '').replace(/[^\d]/g, '').trim();
+    if (!cleanId) return;
+    const targetUrl =
+      actionMode === 'escuchar'
+        ? `https://panel.2wcall.com/order/index/view/${cleanId}#call_records`
+        : `https://panel.2wcall.com/order/change/${cleanId}`;
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
+  };
 
   // Bases de datos (con respaldo en caché local para carga instantánea)
   const [bd1Data, setBd1Data] = useState(() => {
@@ -956,62 +984,268 @@ export default function App() {
             </div>
 
             {/* Tabla de todas las órdenes gestionadas por este operador */}
+            {/* Tabla de todas las órdenes gestionadas por este operador */}
             <div className="gtl-card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                <strong style={{ fontSize: '14px', textTransform: 'uppercase' }}>
-                  📋 Ordenes tocadas por el operador {activeOperatorDetail.stats.operador} ({activeOperatorDetail.records.length} ordenes)
-                </strong>
-              </div>
-              <div className="gtl-table-scroll-20">
-                <table className="gtl-table">
-                  <thead>
-                    <tr>
-                      <th>N°</th>
-                      <th>N° Orden</th>
-                      <th>País</th>
-                      <th>Producto</th>
-                      <th>Estado CRM</th>
-                      <th>Clasificación</th>
-                      <th>Precio Local</th>
-                      <th>Check (USD)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {activeOperatorDetail.records.map((rec, idx) => (
-                      <tr key={idx}>
-                        <td>     </td>
-                        <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>
-                          {rec.orderNumber || `#${idx + 1}`}
-                        </td>
-                        <td>
-                          {getFlag(rec.country)} {rec.country}
-                        </td>
-                        <td style={{ maxWidth: '280px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={rec.products}>
-                          {rec.products || '-'}
-                        </td>
-                        <td>{rec.rawStatus}</td>
-                        <td>
-                          <span
-                            className={`gtl-badge ${
-                              rec.category === 'approve'
-                                ? 'gtl-badge-green'
-                                : rec.category === 'reject'
-                                ? 'gtl-badge-red'
-                                : 'gtl-badge-amber'
-                            }`}
-                          >
-                            {rec.category.toUpperCase()}
-                          </span>
-                        </td>
-                        <td style={{ fontWeight: 600 }}>
-                          {rec.finalPriceLocal.toLocaleString()}
-                        </td>
-                        <td className="gtl-check-cell">${rec.priceUsd.toFixed(2)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {(() => {
+                const allOpRecords = activeOperatorDetail.records || [];
+                const q = normalizeText(opOrderSearch);
+
+                // 1. Filtrar por estado (Todas / Ventas / Rechazos / Trash) y por buscador
+                const filteredOpOrders = allOpRecords.filter((rec) => {
+                  if (opOrderCategory !== 'all' && rec.category !== opOrderCategory) {
+                    return false;
+                  }
+                  if (q) {
+                    const matchId = normalizeText(rec.orderNumber).includes(q);
+                    const matchCountry = normalizeText(rec.country).includes(q);
+                    const matchProd = normalizeText(rec.products).includes(q);
+                    const matchStatus = normalizeText(rec.rawStatus).includes(q);
+                    return matchId || matchCountry || matchProd || matchStatus;
+                  }
+                  return true;
+                });
+
+                // 2. Ordenar de mayor a menor o viceversa
+                const sortedOpOrders = [...filteredOpOrders].sort((a, b) => {
+                  if (opOrderSortField === 'country') {
+                    const cmp = String(a.country || '').localeCompare(String(b.country || ''), 'es', { sensitivity: 'base' });
+                    return opOrderSortDir === 'asc' ? cmp : -cmp;
+                  }
+                  if (opOrderSortField === 'orderNumber') {
+                    const numA = parseInt(String(a.orderNumber || '').replace(/[^\d]/g, ''), 10) || 0;
+                    const numB = parseInt(String(b.orderNumber || '').replace(/[^\d]/g, ''), 10) || 0;
+                    return opOrderSortDir === 'asc' ? numA - numB : numB - numA;
+                  }
+                  const valA = Number(a[opOrderSortField]) || 0;
+                  const valB = Number(b[opOrderSortField]) || 0;
+                  return opOrderSortDir === 'asc' ? valA - valB : valB - valA;
+                });
+
+                return (
+                  <>
+                    {/* Cabecera del cuadro */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
+                      <strong style={{ fontSize: '14px', textTransform: 'uppercase' }}>
+                        📋 ÓRDENES TOCADAS POR EL OPERADOR {activeOperatorDetail.stats.operador} ({sortedOpOrders.length} DE {allOpRecords.length} ÓRDENES)
+                      </strong>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+                        <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>
+                          Acción por defecto al tocar ID:
+                        </span>
+                        <select
+                          className="gtl-select"
+                          style={{ width: 'auto', padding: '6px 10px', fontWeight: 700 }}
+                          value={defaultOrderAction}
+                          onChange={(e) => {
+                            setDefaultOrderAction(e.target.value);
+                            setRowOrderActions({});
+                          }}
+                        >
+                          <option value="llenado">📝 Ver llenado (Default)</option>
+                          <option value="escuchar">🎧 Escuchar llamada</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Barra de Separación por Clasificación (Ventas, Rechazos, Trash) + Buscador */}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', marginBottom: '12px' }}>
+                      <button
+                        className={`gtl-btn-secondary ${opOrderCategory === 'all' ? 'active' : ''}`}
+                        onClick={() => setOpOrderCategory('all')}
+                      >
+                        Todas ({allOpRecords.length})
+                      </button>
+                      <button
+                        className={`gtl-btn-secondary ${opOrderCategory === 'approve' ? 'active' : ''}`}
+                        onClick={() => setOpOrderCategory('approve')}
+                      >
+                        🟢 Solo Ventas / Approve ({activeOperatorDetail.stats.ventas})
+                      </button>
+                      <button
+                        className={`gtl-btn-secondary ${opOrderCategory === 'reject' ? 'active' : ''}`}
+                        onClick={() => setOpOrderCategory('reject')}
+                      >
+                        🔴 Solo Rechazos / Reject ({activeOperatorDetail.stats.rechazos})
+                      </button>
+                      <button
+                        className={`gtl-btn-secondary ${opOrderCategory === 'trash' ? 'active' : ''}`}
+                        onClick={() => setOpOrderCategory('trash')}
+                      >
+                        🟤 Solo Trash ({activeOperatorDetail.stats.trash})
+                      </button>
+
+                      <div style={{ flex: 1, minWidth: '220px' }}>
+                        <input
+                          type="text"
+                          className="gtl-input"
+                          placeholder="🔍 Buscar por N° de orden, producto o país..."
+                          value={opOrderSearch}
+                          onChange={(e) => setOpOrderSearch(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Botones de Ordenamiento de Órdenes (Mayor a menor / Menor a mayor) */}
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: '8px',
+                        padding: '10px 12px',
+                        background: 'var(--bg-elevated)',
+                        borderRadius: '8px',
+                        marginBottom: '14px',
+                      }}
+                    >
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                        Ordenar órdenes por:
+                      </span>
+
+                      <button
+                        className={`gtl-btn-secondary ${opOrderSortField === 'orderNumber' ? 'active' : ''}`}
+                        onClick={() => handleOpOrderSort('orderNumber')}
+                      >
+                        N° Orden {opOrderSortField === 'orderNumber' ? (opOrderSortDir === 'desc' ? '↓ Recientes' : '↑ Antiguas') : ''}
+                      </button>
+
+                      <button
+                        className={`gtl-btn-secondary ${opOrderSortField === 'priceUsd' ? 'active' : ''}`}
+                        onClick={() => handleOpOrderSort('priceUsd')}
+                      >
+                        Check (USD) {opOrderSortField === 'priceUsd' ? (opOrderSortDir === 'desc' ? '↓ Mayor a menor' : '↑ Menor a mayor') : ''}
+                      </button>
+
+                      <button
+                        className={`gtl-btn-secondary ${opOrderSortField === 'country' ? 'active' : ''}`}
+                        onClick={() => handleOpOrderSort('country')}
+                      >
+                        País (A-Z) {opOrderSortField === 'country' ? (opOrderSortDir === 'asc' ? '↑ A-Z' : '↓ Z-A') : ''}
+                      </button>
+                    </div>
+
+                    {/* Tabla de Órdenes */}
+                    <div className="gtl-table-scroll-20">
+                      <table className="gtl-table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: '55px', textAlign: 'center' }}>N°</th>
+                            <th>ID</th>
+                            <th>PAÍS</th>
+                            <th>PROMOCIÓN</th>
+                            <th>ESTATUS</th>
+                            <th>CHECK (USD)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sortedOpOrders.map((rec, idx) => {
+                            const orderId = String(rec.orderNumber || '').trim();
+                            const rowKey = `${orderId}_${idx}`;
+                            const selectedMode = rowOrderActions[rowKey] || defaultOrderAction;
+
+                            return (
+                              <tr key={rowKey}>
+                                {/* 1. Columna N° contando cada orden */}
+                                <td style={{ textAlign: 'center', fontWeight: 800, color: 'var(--text-muted)' }}>
+                                  {idx + 1}
+                                </td>
+
+                                {/* 2. N° Orden clickeable + Selector al lado (Ver llenado / Escuchar) */}
+                                <td >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => open2wCallOrder(orderId, selectedMode)}
+                                      title={
+                                        selectedMode === 'escuchar'
+                                          ? `Ir a Escuchar orden ${orderId}`
+                                          : `Ir a Ver llenado de orden ${orderId}`
+                                      }
+                                      style={{
+                                        background: 'var(--bg-elevated)',
+                                        color: 'var(--text-primary)',
+                                        border: '1px solid var(--accent-Warm)',
+                                        borderRadius: '6px',
+                                        padding: '5px 10px',
+                                        fontFamily: 'monospace',
+                                        fontWeight: 800,
+                                        fontSize: '13px',
+                                        cursor: 'pointer',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '6px',
+                                      }}
+                                    >
+                                      <span>{orderId || `#${idx + 1}`}</span>
+                                      <span style={{ fontSize: '11px', color: 'var(--accent-Warm)' }}>↗</span>
+                                    </button>
+
+                                    <select
+                                      value={selectedMode}
+                                      onChange={(e) => {
+                                        const newMode = e.target.value;
+                                        setRowOrderActions((prev) => ({
+                                          ...prev,
+                                          [rowKey]: newMode,
+                                        }));
+                                      }}
+                                      style={{
+                                        background: 'var(--bg-input)',
+                                        color: 'var(--text-secondary)',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: '6px',
+                                        padding: '4px 8px',
+                                        fontSize: '11px',
+                                        fontWeight: 700,
+                                        cursor: 'pointer',
+                                      }}
+                                    >
+                                      <option value="llenado">📝 Ver llenado</option>
+                                      <option value="escuchar">🎧 Escuchar</option>
+                                    </select>
+                                  </div>
+                                </td>
+
+                                <td>
+                                  {getFlag(rec.country)} {rec.country}
+                                </td>
+
+                                <td
+                                  style={{
+                                    maxWidth: '280px',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                  }}
+                                  title={rec.products}
+                                >
+                                  {rec.products || '-'}
+                                </td>
+
+                                <td>
+                                  <span
+                                    className={`gtl-badge ${
+                                      rec.category === 'approve'
+                                        ? 'gtl-badge-green'
+                                        : rec.category === 'reject'
+                                        ? 'gtl-badge-red'
+                                        : 'gtl-badge-amber'
+                                    }`}
+                                  >
+                                    {rec.category.toUpperCase()}
+                                  </span>
+                                </td>
+                                <td className="gtl-check-cell">${rec.priceUsd.toFixed(2)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
         ) : (
