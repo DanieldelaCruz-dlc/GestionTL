@@ -59,6 +59,7 @@ export function extractSpreadsheetId(urlOrId) {
 }
 
 // 3. Descargar datos desde una pestaña de Google Sheets
+// 3. Descargar datos desde una pestaña de Google Sheets (Sin caché para traer datos en tiempo real)
 export async function fetchGoogleSheet(urlOrId, sheetName = '') {
   const spreadsheetId = extractSpreadsheetId(urlOrId);
   if (!spreadsheetId) {
@@ -70,7 +71,8 @@ export async function fetchGoogleSheet(urlOrId, sheetName = '') {
     exportUrl += `&sheet=${encodeURIComponent(sheetName.trim())}`;
   }
 
-  const response = await fetch(exportUrl);
+  // cache: 'no-store' obliga al navegador a consultar Google Sheets en tiempo real siempre
+  const response = await fetch(exportUrl, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(
       `No se pudo leer la pestaña "${sheetName}". Verifica que el nombre de la pestaña coincida y el archivo sea público con enlace.`

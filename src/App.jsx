@@ -6,7 +6,7 @@ import './App.css';
 // (Si ya lo sincronizaste una vez en tu navegador, se toma automáticamente de tu memoria local;
 // también puedes pegar aquí tu link de 1rc586X_ibh0v3q79aaRE... para dejarlo fijo en el código)
 const DEFAULT_SHEET_URL =
-  'https://docs.google.com/spreadsheets/d/1RLIyRwIuMcqxDhictdn4U30bYNNaLa1LdszB4PILV-U/edit?gid=958277312#gid=958277312';
+  'https://docs.google.com/spreadsheets/d/1r586X_ibh0v3q79aaRBGsysxL8ibishyHgKvHZ0fz3A/edit?usp=sharing';
 
 const DEFAULT_RATES = {
   CHILE: 980.39,
@@ -152,9 +152,14 @@ export default function App() {
   });
 
   // Configuración de Google Sheets (oculta y automática)
-  const [sheetUrl, setSheetUrl] = useState(
-    () => localStorage.getItem('gestiontl_sheet_url') || DEFAULT_SHEET_URL
-  );
+  const [sheetUrl, setSheetUrl] = useState(() => {
+    const saved = localStorage.getItem('gestiontl_sheet_url');
+    // Si no hay enlace guardado o si quedó guardado el enlace viejo de prueba, usa el DEFAULT_SHEET_URL actual
+    if (!saved || saved.includes('1RLIyRwIuMcqxDhictdn4U30bYNNaLa1LdszB4PILV-U')) {
+      return DEFAULT_SHEET_URL;
+    }
+    return saved;
+  });
   const [bd1SheetName, setBd1SheetName] = useState(
     () => localStorage.getItem('gestiontl_bd1_tab') || 'BD1'
   );
@@ -974,7 +979,7 @@ export default function App() {
                   <tbody>
                     {activeOperatorDetail.records.map((rec, idx) => (
                       <tr key={idx}>
-                        <td>                        </td>
+                        <td>     </td>
                         <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>
                           {rec.orderNumber || `#${idx + 1}`}
                         </td>
