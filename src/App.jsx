@@ -75,6 +75,10 @@ function parsePrice(rawPrice) {
 }
 
 function classifyStatus(rawStatus, rawSubStatus) {
+  const subCode = String(rawSubStatus || '').match(/\b(501|503|505|508|517|527|534|535|601|602|607|612|613|614|616)\b/);
+  if (subCode) {
+    return subCode[1].startsWith('5') ? 'reject' : 'trash';
+  }
   const st = normalizeText(`${rawStatus || ''} ${rawSubStatus || ''}`);
   if (!st || st.includes('approv') || st.includes('aprob') || st.includes('venta') || st.includes('confirm')) {
     return 'approve';
@@ -326,6 +330,7 @@ export default function App() {
       const orderNumber = getRowValue(row, ['Number', 'Index by partner', 'Orden', 'ID']);
       const dateCrm = getRowValue(row, ['Date of creation in CRM', 'Date', 'Fecha']);
       const products = getRowValue(row, ['Products', 'Product lead', 'Producto']);
+      const comment = String(getRowValue(row, ['Comment', 'Comentario', 'Comentarios', 'Observacion']) || '').trim();
 
       return {
         usuario,
@@ -340,6 +345,7 @@ export default function App() {
         orderNumber,
         dateCrm,
         products,
+        comment,
       };
     });
   }, [bd1Data, operatorDirectory, countryRates]);

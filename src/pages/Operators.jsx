@@ -12,6 +12,35 @@ const COUNTRY_FLAGS = {
   URUGUAY: '🇺🇾',
 };
 
+// Diccionario oficial de Sub Status para REJECT y TRASH
+const SUB_STATUS_DICTIONARY = {
+  // REJECT
+  '501': 'Muy caro',
+  '503': 'Contraindicaciones médicas',
+  '505': 'Auto desviation',
+  '508': 'Críticas negativas',
+  '517': 'Auto reject',
+  '527': 'Colgó y no responde más',
+  '534': 'Pensará / consultará',
+  '535': 'Hará otro pedido más tarde',
+  // TRASH
+  '601': 'Número no existe',
+  '602': 'Duplicado de orden',
+  '607': 'Entrega no disponible',
+  '612': 'Fuera de zona de entrega',
+  '613': 'Consulta sobre pedido no entregado',
+  '614': 'Spam / No es cliente / Menor de edad',
+  '616': 'Mala publicidad',
+};
+
+// Prioridad de ordenamiento: 1° Ventas (Approve), 2° Rechazos (Reject), 3° Trash
+const CATEGORY_ORDER_PRIORITY = {
+  approve: 1,
+  reject: 2,
+  trash: 3,
+  pending: 4,
+};
+
 function normalizeText(value) {
   return String(value || '')
     .normalize('NFD')
@@ -30,6 +59,28 @@ export function getFlag(countryName) {
   return COUNTRY_FLAGS[clean] || '🌎';
 }
 
+// Formatea el Estatus y Sub Status para mostrar en la columna ESTATUS
+function formatOrderStatusLabel(rec) {
+  if (rec.category === 'approve') {
+    return 'APPROVE';
+  }
+
+  const rawSub = String(rec.rawSubStatus || '').trim();
+  const codeMatch = rawSub.match(/\d{3}/);
+  const code = codeMatch ? codeMatch[0] : rawSub;
+  const description = SUB_STATUS_DICTIONARY[code];
+
+  const prefix = rec.category === 'reject' ? 'REJECT' : rec.category === 'trash' ? 'TRASH' : rec.rawStatus.toUpperCase();
+
+  if (description) {
+    return `${prefix} • ${code} - ${description}`;
+  }
+  if (rawSub && rawSub !== '-' && rawSub !== '0') {
+    return `${prefix} (${rawSub})`;
+  }
+  return prefix;
+}
+
 export default function Operators({
   enrichedRecords,
   selectedOperatorCode,
@@ -45,8 +96,9 @@ export default function Operators({
   // Estados para la tabla de órdenes dentro del detalle (Drill-down) del operador
   const [opOrderSearch, setOpOrderSearch] = useState('');
   const [opOrderCategory, setOpOrderCategory] = useState('all'); // 'all' | 'approve' | 'reject' | 'trash'
-  const [opOrderSortField, setOpOrderSortField] = useState('orderNumber');
-  const [opOrderSortDir, setOpOrderSortDir] = useState('desc');
+  const [opOrderSortField, setOpOrderSortField] = useState('statusPriority'); // Por defecto: Ventas -> Rechazos -> Trash
+  const [opOrderSortDir, setOpOrderSortDir] = useState('asc');
+  const [showCommentCol, setShowCommentCol] = useState(false); // Botón opcional "Comentario"
   const [defaultOrderAction, setDefaultOrderAction] = useState('llenado'); // 'llenado' | 'escuchar'
   const [rowOrderActions, setRowOrderActions] = useState({});
 
@@ -64,7 +116,9 @@ export default function Operators({
       setOpOrderSortDir((prev) => (prev === 'desc' ? 'asc' : 'desc'));
     } else {
       setOpOrderSortField(field);
-      setOpOrderSortDir(field === 'country' ? 'asc' : 'desc');
+      setOpOrderSortDir(
+        field === 'country' || field === 'statusPriority' ? 'asc' : 'desc'
+      );
     }
   };
 
@@ -113,8 +167,7 @@ export default function Operators({
     });
   }, [enrichedRecords, selectedCountry, selectedTLFilter, searchQuery]);
 
-  // Agrupación por Operador (con Check = 0 si ventas === 0)
-  // Agrupación por Operador (con Check = 0 si ventas === 0 y lista de TODOS los países que toca)
+  // Agrupación por Operador (con Check = 0 si ventas === 0 y todos los países que toca)
   const operatorStats = useMemo(() => {
     const map = new Map();
 
@@ -265,31 +318,72 @@ export default function Operators({
         return false;
       }
       if (q) {
+        const statusLabel = formatOrderStatusLabel(rec);
         const matchId = normalizeText(rec.orderNumber).includes(q);
         const matchCountry = normalizeText(rec.country).includes(q);
         const matchProd = normalizeText(rec.products).includes(q);
-        const matchStatus = normalizeText(rec.rawStatus).includes(q);
-        return matchId || matchCountry || matchProd || matchStatus;
+        const matchStatus = normalizeText(statusLabel).includes(q);
+        const matchComment = normalizeText(rec.comment).includes(q);
+        return matchId || matchCountry || matchProd || matchStatus || matchComment;
       }
       return true;
     });
 
+    // Ordenamiento (Siempre agrupando primero Ventas -> Rechazos -> Trash por defecto, o según el botón elegido)
     const sortedOpOrders = [...filteredOpOrders].sort((a, b) => {
+      const prioA = CATEGORY_ORDER_PRIORITY[a.category] || 99;
+      const prioB = CATEGORY_ORDER_PRIORITY[b.category] || 99;
+
+      if (opOrderSortField === 'statusPriority') {
+        if (prioA !== prioB) {
+          return opOrderSortDir === 'asc' ? prioA - prioB : prioB - prioA;
+        }
+        // Dentro del mismo estado (ej. todas las ventas), ordenar de la más reciente a la más antigua
+        const idA = parseInt(String(a.orderNumber || '').replace(/[^\d]/g, ''), 10) || 0;
+        const idB = parseInt(String(b.orderNumber || '').replace(/[^\d]/g, ''), 10) || 0;
+        return idB - idA;
+      }
+
       if (opOrderSortField === 'country') {
         const cmp = String(a.country || '').localeCompare(String(b.country || ''), 'es', {
           sensitivity: 'base',
         });
-        return opOrderSortDir === 'asc' ? cmp : -cmp;
+        if (cmp !== 0) return opOrderSortDir === 'asc' ? cmp : -cmp;
+        return prioA - prioB;
       }
+
       if (opOrderSortField === 'orderNumber') {
+        // Mantenemos primero Ventas -> Rechazos -> Trash y dentro de cada bloque ordenamos por N° de Orden
+        if (prioA !== prioB) return prioA - prioB;
         const numA = parseInt(String(a.orderNumber || '').replace(/[^\d]/g, ''), 10) || 0;
         const numB = parseInt(String(b.orderNumber || '').replace(/[^\d]/g, ''), 10) || 0;
         return opOrderSortDir === 'asc' ? numA - numB : numB - numA;
       }
-      const valA = Number(a[opOrderSortField]) || 0;
-      const valB = Number(b[opOrderSortField]) || 0;
-      return opOrderSortDir === 'asc' ? valA - valB : valB - valA;
+
+      const valA = a.category === 'approve' ? Number(a[opOrderSortField]) || 0 : 0;
+      const valB = b.category === 'approve' ? Number(b[opOrderSortField]) || 0 : 0;
+      if (valA !== valB) return opOrderSortDir === 'asc' ? valA - valB : valB - valA;
+      return prioA - prioB;
     });
+
+    // Conteo dinámico de las órdenes que se están mostrando en la tabla
+    const shownCounts = sortedOpOrders.reduce(
+      (acc, r) => {
+        acc.total += 1;
+        if (r.category === 'approve') {
+          acc.ventas += 1;
+          acc.sumApprovedUsd += r.priceUsd;
+        } else if (r.category === 'reject') {
+          acc.rechazos += 1;
+        } else if (r.category === 'trash') {
+          acc.trash += 1;
+        }
+        return acc;
+      },
+      { total: 0, ventas: 0, rechazos: 0, trash: 0, sumApprovedUsd: 0 }
+    );
+    const shownAvgCheckUsd =
+      shownCounts.ventas > 0 ? shownCounts.sumApprovedUsd / shownCounts.ventas : 0;
 
     return (
       <div>
@@ -439,14 +533,24 @@ export default function Operators({
           </div>
         </div>
 
-        {/* Tabla de Órdenes del Operador con Selector 2wcall */}
+        {/* Tabla de Órdenes del Operador */}
         <div className="gtl-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
             <strong style={{ fontSize: '14px', textTransform: 'uppercase' }}>
               📋 ÓRDENES TOCADAS POR EL OPERADOR {activeOperatorDetail.stats.operador} ({sortedOpOrders.length} DE {allOpRecords.length} ÓRDENES)
             </strong>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', fontSize: '12px' }}>
+              {/* Botón para mostrar/ocultar la columna Comentario */}
+              <button
+                type="button"
+                className={`gtl-btn-secondary ${showCommentCol ? 'active' : ''}`}
+                onClick={() => setShowCommentCol((v) => !v)}
+                title="Mostrar u ocultar la columna de Comentarios de las órdenes"
+              >
+                💬 {showCommentCol ? 'Ocultar Comentario' : 'Comentario'}
+              </button>
+
               <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>
                 Acción por defecto al tocar ID:
               </span>
@@ -495,13 +599,14 @@ export default function Operators({
               <input
                 type="text"
                 className="gtl-input"
-                placeholder="🔍 Buscar por N° de orden, producto o país..."
+                placeholder="🔍 Buscar por ID, sub-estatus (ej. 501, Muy caro), comentario o producto..."
                 value={opOrderSearch}
                 onChange={(e) => setOpOrderSearch(e.target.value)}
               />
             </div>
           </div>
 
+          {/* Barra superior de Ordenamiento + Botón Comentario */}
           <div
             style={{
               display: 'flex',
@@ -517,6 +622,13 @@ export default function Operators({
             <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>
               Ordenar órdenes por:
             </span>
+
+            <button
+              className={`gtl-btn-secondary ${opOrderSortField === 'statusPriority' ? 'active' : ''}`}
+              onClick={() => handleOpOrderSort('statusPriority')}
+            >
+              Estatus (Ventas → Rechazos → Trash) {opOrderSortField === 'statusPriority' ? (opOrderSortDir === 'asc' ? '↓' : '↑') : ''}
+            </button>
 
             <button
               className={`gtl-btn-secondary ${opOrderSortField === 'orderNumber' ? 'active' : ''}`}
@@ -545,6 +657,15 @@ export default function Operators({
             >
               País (A-Z) {opOrderSortField === 'country' ? (opOrderSortDir === 'asc' ? '↑ A-Z' : '↓ Z-A') : ''}
             </button>
+
+            <button
+              type="button"
+              className={`gtl-btn-secondary ${showCommentCol ? 'active' : ''}`}
+              style={{ marginLeft: 'auto' }}
+              onClick={() => setShowCommentCol((v) => !v)}
+            >
+              💬 {showCommentCol ? 'Comentario: Visible' : 'Comentario'}
+            </button>
           </div>
 
           <div className="gtl-table-scroll-20">
@@ -554,6 +675,7 @@ export default function Operators({
                   <th style={{ width: '55px', textAlign: 'center' }}>N°</th>
                   <th>ID</th>
                   <th>PAÍS</th>
+                  {showCommentCol && <th>COMENTARIO</th>}
                   <th>PRODUCTO</th>
                   <th>ESTATUS</th>
                   <th>CHECK (USD)</th>
@@ -564,6 +686,7 @@ export default function Operators({
                   const orderId = String(rec.orderNumber || '').trim();
                   const rowKey = `${orderId}_${idx}`;
                   const selectedMode = rowOrderActions[rowKey] || defaultOrderAction;
+                  const statusLabel = formatOrderStatusLabel(rec);
 
                   return (
                     <tr key={rowKey}>
@@ -624,9 +747,27 @@ export default function Operators({
                           </select>
                         </div>
                       </td>
-                      <td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
                         {getFlag(rec.country)} {rec.country}
                       </td>
+
+                      {/* Columna opcional de Comentario (entre PAÍS y PRODUCTO) */}
+                      {showCommentCol && (
+                        <td
+                          style={{
+                            maxWidth: '340px',
+                            minWidth: '220px',
+                            fontSize: '12px',
+                            lineHeight: '1.4',
+                            color: 'var(--text-primary)',
+                            whiteSpace: 'normal',
+                            wordBreak: 'break-word',
+                          }}
+                        >
+                          {rec.comment || <span style={{ color: 'var(--text-muted)' }}>Sin comentario</span>}
+                        </td>
+                      )}
+
                       <td
                         style={{
                           maxWidth: '280px',
@@ -638,6 +779,8 @@ export default function Operators({
                       >
                         {rec.products || '-'}
                       </td>
+
+                      {/* Columna ESTATUS: Muestra APPROVE para ventas, y el Sub Status traducido para REJECT / TRASH */}
                       <td>
                         <span
                           className={`gtl-badge ${
@@ -648,9 +791,10 @@ export default function Operators({
                               : 'gtl-badge-amber'
                           }`}
                         >
-                          {rec.category.toUpperCase()}
+                          {statusLabel}
                         </span>
                       </td>
+
                       <td className="gtl-check-cell">
                         ${rec.category === 'approve' ? rec.priceUsd.toFixed(2) : '0.00'}
                       </td>
@@ -658,6 +802,20 @@ export default function Operators({
                   );
                 })}
               </tbody>
+              {/* Fila de conteo final de las órdenes mostradas */}
+              <tfoot>
+                <tr>
+                  <td colSpan={showCommentCol ? 4 : 3}>
+                    TOTAL ÓRDENES MOSTRADAS: {shownCounts.total}
+                  </td>
+                  <td colSpan={2}>
+                    🟢 Ventas: {shownCounts.ventas} &nbsp;|&nbsp; 🔴 Rechazos: {shownCounts.rechazos} &nbsp;|&nbsp; 🟤 Trash: {shownCounts.trash}
+                  </td>
+                  <td className="gtl-check-cell">
+                    ${shownAvgCheckUsd.toFixed(2)}
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         </div>

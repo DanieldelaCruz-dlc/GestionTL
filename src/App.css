@@ -23,43 +23,71 @@
   --shadow-soft: 0 4px 20px rgba(24, 23, 21, 0.05);
 }
 
+
 [data-theme='dark'] {
-  /* Paleta Modo Oscuro: Negro Carbón, Grafito y Beige Dorado */
-  --bg-main: #11110f;
-  --bg-card: #1a1917;
-  --bg-elevated: #25231f;
-  --bg-input: #141311;
-  --bg-sidebar: #0c0c0b;
-  --text-primary: #f3ede2;
-  --text-secondary: #c2b8a3;
-  --text-muted: #857d6d;
-  --border-color: #302d27;
-  --accent-primary: #dfd3be;
-  --accent-primary-text: #141311;
-  --accent-Warm: #d4ad73;
-  --accent-Warm-soft: rgba(212, 173, 115, 0.18);
-  --row-hover: #22201c;
-  --badge-green-bg: rgba(38, 166, 91, 0.22);
-  --badge-green-text: #5ce092;
-  --badge-red-bg: rgba(214, 69, 65, 0.22);
-  --badge-red-text: #ff8582;
-  --badge-amber-bg: rgba(230, 168, 65, 0.2);
-  --badge-amber-text: #f7c97e;
-  --shadow-soft: 0 6px 24px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+
+  /* Fondo general y estructura */
+  --bg-main: #160d18;
+  --bg-card: #241829;
+  --bg-elevated: #35243a;
+  --bg-input: #211724;
+  --bg-sidebar: #100810;
+
+  /* Textos: contraste mejorado */
+  --text-primary: #f7f0f8;
+  --text-secondary: #d6c7dc;
+  --text-muted: #b5a4bd;
+
+  /* Bordes y elementos destacados */
+  --border-color: #59445f;
+  --accent-primary: #a57fa1;
+  --accent-primary-text: #160d18;
+  --accent-Warm: #b99bc4;
+  --accent-Warm-soft: rgba(165, 127, 161, 0.20);
+
+  /* Interacción */
+  --row-hover: #3b2941;
+
+  /* Estados de las ventas */
+  --badge-green-bg: rgba(46, 160, 103, 0.22);
+  --badge-green-text: #82e5ad;
+
+  --badge-red-bg: rgba(224, 78, 91, 0.22);
+  --badge-red-text: #ff9da5;
+
+  --badge-amber-bg: rgba(230, 175, 86, 0.22);
+  --badge-amber-text: #ffd18b;
+
+  --shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.25);
 }
+
 
 * {
   box-sizing: border-box;
 }
 
+
 body {
   margin: 0;
   background-color: var(--bg-main);
   color: var(--text-primary);
-  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', sans-serif;
+
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  font-kerning: normal;
+
   transition: background-color 0.25s ease, color 0.25s ease;
   overflow-x: hidden;
 }
+
 
 /* ESTRUCTURA CON SIDEBAR RETRÁCTIL Y 100% RESPONSIVO */
 .gtl-layout {
@@ -607,11 +635,9 @@ body {
 
 
 /* ==========================================
-   GESTIONTL - MEJORAS DE CONTRASTE
-   Especialmente para modo oscuro
+   GESTIONTL - CONTRASTE Y PALETA MORADA
    ========================================== */
 
-/* Títulos principales */
 [data-theme="dark"] .gtl-title,
 [data-theme="dark"] .gtl-main h1,
 [data-theme="dark"] .gtl-main h2,
@@ -619,83 +645,240 @@ body {
   color: var(--text-primary);
 }
 
-/* Nombre y datos principales del operador */
-[data-theme="dark"] .gtl-operator-name,
-[data-theme="dark"] .gtl-operator-header h1,
-[data-theme="dark"] .gtl-operator-header h2,
-[data-theme="dark"] .gtl-operator-detail h1,
-[data-theme="dark"] .gtl-operator-detail h2 {
-  color: #f8f3e9;
+[data-theme="dark"] .gtl-card,
+[data-theme="dark"] .gtl-kpi-card {
+  background: var(--bg-card);
+  border-color: var(--border-color);
 }
 
-/* Texto normal */
-[data-theme="dark"] .gtl-main {
+[data-theme="dark"] .gtl-main,
+[data-theme="dark"] .gtl-main p,
+[data-theme="dark"] .gtl-main label,
+[data-theme="dark"] .gtl-main td {
   color: var(--text-primary);
 }
 
-/* Textos secundarios */
 [data-theme="dark"] .gtl-subtitle,
-[data-theme="dark"] .gtl-main small,
-[data-theme="dark"] .gtl-muted {
-  color: #c2b8a3;
+[data-theme="dark"] .gtl-kpi-label,
+[data-theme="dark"] .gtl-kpi-sub,
+[data-theme="dark"] .gtl-muted,
+[data-theme="dark"] .gtl-main small {
+  color: var(--text-secondary);
 }
 
-/* Tarjetas */
-[data-theme="dark"] .gtl-card,
-[data-theme="dark"] .gtl-kpi-card {
-  background: #1c1b18;
-  border-color: #39352e;
+[data-theme="dark"] .gtl-table thead th {
+  background: var(--bg-elevated);
+  color: #f7f0f8;
+  border-color: var(--border-color);
 }
 
-/* Encabezados de tablas */
-[data-theme="dark"] .gtl-main table th {
-  background: #29261f;
-  color: #f5ead8;
-  border-color: #403a30;
+[data-theme="dark"] .gtl-table tbody tr {
+  background: var(--bg-card);
 }
 
-/* Celdas de tablas */
-[data-theme="dark"] .gtl-main table td {
-  color: #e9e2d6;
-  border-color: #353129;
+[data-theme="dark"] .gtl-table tbody tr:hover,
+[data-theme="dark"] .gtl-table tbody tr.clickable-row:hover {
+  background: var(--row-hover);
 }
 
-/* Filas al pasar el cursor */
-[data-theme="dark"] .gtl-main table tbody tr:hover {
-  background: #29261f;
+[data-theme="dark"] .gtl-table td,
+[data-theme="dark"] .gtl-table tfoot td {
+  border-color: var(--border-color);
 }
 
-/* Campos de búsqueda y listas desplegables */
+[data-theme="dark"] .gtl-table tfoot td {
+  background: var(--bg-elevated);
+}
+
+[data-theme="dark"] .gtl-input,
+[data-theme="dark"] .gtl-select,
 [data-theme="dark"] .gtl-main input,
 [data-theme="dark"] .gtl-main select,
 [data-theme="dark"] .gtl-main textarea {
-  background: #171613;
-  color: #f5f0e7;
-  border-color: #51483a;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border-color: var(--border-color);
 }
 
-/* Texto de ayuda dentro de los campos */
+[data-theme="dark"] .gtl-input::placeholder,
 [data-theme="dark"] .gtl-main input::placeholder,
 [data-theme="dark"] .gtl-main textarea::placeholder {
-  color: #aaa08e;
+  color: var(--text-muted);
   opacity: 1;
 }
 
-/* Botones secundarios */
-[data-theme="dark"] .gtl-main button {
-  border-color: #51483a;
+[data-theme="dark"] .gtl-btn-secondary,
+[data-theme="dark"] .gtl-theme-btn,
+[data-theme="dark"] .gtl-mobile-btn {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--border-color);
 }
 
-/* Separación visual entre secciones */
-[data-theme="dark"] .gtl-main hr {
-  border-color: #39352e;
+[data-theme="dark"] .gtl-btn-secondary:hover,
+[data-theme="dark"] .gtl-theme-btn:hover {
+  background: var(--row-hover);
+  border-color: var(--accent-Warm);
 }
 
-/* Enlaces */
+[data-theme="dark"] .gtl-btn-secondary.active {
+  background: var(--accent-primary);
+  color: var(--accent-primary-text);
+  border-color: var(--accent-primary);
+}
+
+[data-theme="dark"] .gtl-check-cell {
+  color: var(--accent-Warm);
+  border-left-color: var(--accent-Warm);
+}
+
+[data-theme="dark"] .gtl-sidebar {
+  border-right-color: var(--border-color);
+}
+
+[data-theme="dark"] .gtl-sidebar-top,
+[data-theme="dark"] .gtl-sidebar-footer {
+  border-color: var(--border-color);
+}
+
+[data-theme="dark"] .gtl-sidebar-title {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .gtl-collapse-btn {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+[data-theme="dark"] .gtl-nav-item {
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .gtl-nav-item:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .gtl-nav-item.active {
+  background: var(--accent-Warm);
+  color: #160d18;
+}
+
+[data-theme="dark"] .gtl-nav-item.active .gtl-nav-count {
+  background: rgba(22, 13, 24, 0.18);
+  color: #160d18;
+}
+
+[data-theme="dark"] .gtl-sync-status {
+  color: var(--text-secondary);
+}
+
 [data-theme="dark"] .gtl-main a {
-  color: #e3bd80;
+  color: #d6b6df;
 }
 
 [data-theme="dark"] .gtl-main a:hover {
-  color: #ffe0a8;
+  color: #f2dafa;
+}
+
+[data-theme="dark"] .gtl-main hr {
+  border-color: var(--border-color);
+}
+
+
+/* ==========================================
+   TIPOGRAFÍA INTER - GESTION TL
+   ========================================== */
+
+/* Títulos del panel */
+.gtl-title {
+  font-size: clamp(18px, 1.5vw, 23px);
+  font-weight: 750;
+  letter-spacing: -0.035em;
+  line-height: 1.25;
+}
+
+.gtl-subtitle {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+
+/* Encabezados de las tarjetas */
+.gtl-kpi-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  line-height: 1.4;
+}
+
+.gtl-kpi-value {
+  font-size: 27px;
+  font-weight: 750;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.gtl-kpi-sub {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* Tablas de operadores y órdenes */
+.gtl-table {
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.gtl-table thead th {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  line-height: 1.4;
+}
+
+.gtl-table td {
+  font-size: 12px;
+  font-weight: 450;
+}
+
+/* Botones y filtros */
+.gtl-btn-primary,
+.gtl-btn-secondary,
+.gtl-theme-btn,
+.gtl-pill,
+.gtl-input,
+.gtl-select {
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: -0.01em;
+}
+
+.gtl-btn-primary,
+.gtl-btn-secondary,
+.gtl-theme-btn {
+  font-weight: 600;
+}
+
+/* Barra lateral */
+.gtl-sidebar-title {
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: -0.015em;
+}
+
+.gtl-nav-item {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Números y montos alineados */
+.gtl-check-cell,
+.gtl-kpi-value {
+  font-variant-numeric: tabular-nums;
 }
